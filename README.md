@@ -2,7 +2,7 @@
 
 LogisticsNerd is a focused supplier-selection demo for small businesses buying ordinary goods, such as office supplies, packaging, and inventory.
 
-It answers a simple buying question: **Which selected supplier can provide the required quantity by the deadline at the cheapest price?** An optional maximum budget can also constrain the choice.
+It answers a simple buying question: **Which selected supplier can provide the required quantity by the deadline at the cheapest price?** An optional maximum budget can also constrain the choice. Buyers can now choose **Earliest delivery** instead; the same quantity, deadline, and budget requirements still apply.
 
 ## Current status
 
@@ -33,12 +33,12 @@ The preview normally runs at `http://127.0.0.1:4173/`. Both servers bind to the 
 
 ## Intended workflow
 
-1. Choose a sample scenario, then review or edit the item, quantity, required delivery date, and optional budget.
+1. Choose a sample scenario, then review or edit the item, quantity, required delivery date, and optional budget. Select **Lowest cost** (the default) or **Earliest delivery**.
 2. The buyer selects 3–5 suppliers.
 3. Review the explicitly mocked responses with available quantity, quoted total, and expected delivery date.
 4. The system checks each quote against the request.
-5. It recommends the cheapest feasible supplier and explains the recommendation and any rejections.
-6. The buyer reviews the result.
+5. It recommends the best feasible supplier for the selected preference and explains the recommendation and any rejections.
+6. The buyer reviews the result, switches the preference to compare alternatives, and sees the extra cost of earlier delivery.
 
 ## Decision rules
 
@@ -47,15 +47,16 @@ The comparison is deterministic:
 - Reject a quote if its available quantity is below the requested quantity.
 - Reject a quote if its expected delivery date is after the required date.
 - Reject a quote if its total cost exceeds a stated maximum budget.
-- Recommend the lowest total cost among the quotes that meet those requirements.
-- When feasible quotes have equal cost, prefer the earlier delivery date.
+- **Lowest cost:** recommend the lowest total cost among qualifying quotes; earlier delivery breaks a price tie.
+- **Earliest delivery:** recommend the earliest delivery among qualifying quotes; lower total cost breaks a delivery tie.
+- If both price and delivery date are identical, show all tied best quotes.
 - If none qualify, explain why and prompt the buyer to review quantity, deadline, suppliers, or budget.
 
 The recommendation uses supplier-provided facts. It does not verify stock or guarantee actual delivery.
 
 ## Demo scenarios
 
-Choose a scenario card to load its request and supplier pool. Switching scenarios replaces the request fields and supplier selection; **Restore example** reloads the current scenario. **Start again** clears the form while keeping the current supplier pool.
+Choose a scenario card to load its request and supplier pool. Switching scenarios replaces the request fields and supplier selection, preserving the chosen preference; **Restore example** reloads the current scenario. **Start again** clears the form and resets the preference to Lowest cost while keeping the current supplier pool.
 
 All scenario suppliers are selected initially. Choose any 3–5, then **Review supplier quotes** and **Find the best supplier**. Use **Adjust your request** to explore a different deadline or budget, or switch scenarios.
 
@@ -65,7 +66,17 @@ All scenario suppliers are selected initially. Choose any 3–5, then **Review s
 | Printer paper | 100 A4 reams (500 sheets each) by October 8, 2026; $650 | 4 | Everyday Office Supply, $480 | A $420 offer loses because it arrives late |
 | Packaging boxes | 200 medium cartons (12 × 9 × 6 inches) by October 12, 2026; $400 | 5 | Carton Collective, $280 | QuickPack delivers five days earlier for $70 more; the cheapest feasible quote still wins |
 
-Each scenario compares equivalent goods within its supplier pool, with quoted totals assumed to include all charges. These are illustrative sample facts, not market prices. The recommendation always minimizes cost among feasible quotes; there is no separate fastest-delivery preference yet.
+Each scenario compares equivalent goods within its supplier pool, with quoted totals assumed to include all charges. These are illustrative sample facts, not market prices. Both preferences filter out insufficient, late, or over-budget quotes before ranking.
+
+With the default request constraints and all suppliers selected:
+
+| Scenario | Lowest cost | Earliest delivery | Delivery trade-off |
+| --- | --- | --- | --- |
+| Office chairs | Metro Office Supply, $4,500, October 12 | Comfort Seating Co., $5,200, October 10 | 2 days earlier for $700 more |
+| Printer paper | Everyday Office Supply, $480, October 7 | Paper Express Co., $590, October 5 | 2 days earlier for $110 more |
+| Packaging boxes | Carton Collective, $280, October 11 | QuickPack Supply, $350, October 6 | 5 days earlier for $70 more |
+
+The result includes a preference switch and an explicit price-versus-delivery comparison, computed from the currently feasible quotes. Switching preferences does not fetch new quotes or relax requirements.
 
 Useful walkthroughs:
 
@@ -93,7 +104,7 @@ Success means the request → quotes → feasibility checks → comparison → r
 
 The demo covers the buying decision using quantity, delivery deadline, price, and optional budget. Its architecture is a buyer form, JSON sample data, in-memory state, a comparison function, and a results view. It does not submit purchase orders or contact suppliers. Quotes are assumed to describe comparable goods with all charges included, in USD.
 
-Prices and budgets are compared in integer cents; delivery deadlines are inclusive. Equal-price quotes are resolved by earlier delivery. If both price and date are identical, the result shows the tied feasible alternatives for the buyer to choose from.
+Prices and budgets are compared in integer cents; delivery deadlines are inclusive. Ranking follows the selected preference and its tie rule. If both price and date are identical, the result shows the tied feasible alternatives for the buyer to choose from.
 
 The brief excludes transportation routes, truck scheduling, warehouse operations, shipment tracking, inventory optimization, enterprise approval workflows, split orders, and weighted supplier scoring.
 
@@ -112,7 +123,8 @@ If an LLM is used, the brief limits it to extracting structured request fields f
 - [src/data.ts](src/data.ts): scenario loading and matching sample quotes to the selected item, quantity, and suppliers.
 - [tests/compare.test.ts](tests/compare.test.ts): business-rule and input-validation checks.
 - [tests/scenarios.test.ts](tests/scenarios.test.ts): scenario winners, changes to constraints, quote isolation, and preservation of the original data.
+- [tests/preferences.test.ts](tests/preferences.test.ts): both ranking preferences, tie rules, shared feasibility constraints, and price/delivery explanations.
 
-Verification includes 40 automated checks, TypeScript checking, a production build, and browser walkthroughs of all three scenarios, scenario switching, changed deadlines, unsupported quantities, supplier selection, and mobile layouts.
+Verification includes 54 automated checks, TypeScript checking, a production build, and browser walkthroughs of all three scenarios, preference switching, retained form edits, changed deadlines and budgets, unsupported quantities, supplier selection, keyboard controls, and mobile layouts.
 
 Local research and build-planning documents are intentionally excluded from version control by `.gitignore`.

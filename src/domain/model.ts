@@ -60,7 +60,10 @@ export interface Evaluation {
   rejections: Rejection[];
 }
 
+export type PurchasingPreference = 'lowest_cost' | 'earliest_delivery';
+
 export interface ComparisonResult {
+  preference: PurchasingPreference;
   outcome: 'recommended' | 'tied' | 'no_feasible_quote' | 'no_quotes';
   evaluations: Evaluation[];
   recommendedSupplierIds: string[];
