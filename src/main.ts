@@ -1,6 +1,6 @@
 import '@fontsource-variable/dm-sans';
 import './styles.css';
-import { mockQuotes, requestFromDraft, sampleDraft, suppliers } from './data';
+import { mockQuotes, requestFromDraft, sampleDraft, scenarioForItem, scenarios, suppliers } from './data';
 import { compareQuotes } from './domain/compare';
 import { dateLabel, evaluationReason, money } from './domain/reasons';
 import type { ComparisonResult, DraftErrors, Evaluation, ProcurementRequest, RequestDraft, SupplierQuote } from './domain/model';
@@ -9,6 +9,7 @@ import { brandMark, icon } from './icons';
 
 type Step = 1 | 2 | 3;
 let step: Step = 1;
+let activeScenario = scenarios[0];
 let draft = sampleDraft();
 let request: ProcurementRequest | null = null;
 let quotes: SupplierQuote[] = [];
@@ -76,40 +77,45 @@ function fieldError(field: string): string {
   return `<span class="field-error" id="error-${field}" aria-live="polite"></span>`;
 }
 
+function scenarioPicker(): string {
+  return `<section class="scenario-section" aria-label="Sample scenarios"><div class="scenario-heading"><span class="section-kicker">CHOOSE A SAMPLE SCENARIO</span><span>Fictional quotes, real decision rules</span></div><div class="scenario-options" role="group" aria-label="Choose a sample scenario">${scenarios.map((scenario, index) => `<button class="scenario-option ${activeScenario.id === scenario.id ? 'is-active' : ''}" type="button" data-scenario="${scenario.id}" aria-pressed="${activeScenario.id === scenario.id}"><span class="scenario-top"><span class="scenario-icon">${icon(index === 0 ? 'chair' : index === 1 ? 'paper' : 'box')}</span><span class="scenario-check">${icon('check')}</span></span><strong>${escape(scenario.title)}</strong><small>${scenario.quantity} ${scenario.unitLabel} · ${scenario.suppliers.length} suppliers</small></button>`).join('')}</div><p class="scenario-lesson">${icon('spark')}<span>${escape(activeScenario.lesson)}</span></p></section>`;
+}
+
 function requestView(): string {
   return `
     <section class="panel form-panel enter">
       <div class="panel-heading"><div><div class="section-kicker">LET'S START WITH THE ESSENTIALS</div><h2 class="section-title" tabindex="-1">What do you need?</h2><p>One item. A few suppliers. A decision that makes sense.</p></div><span class="section-symbol">${icon('box')}</span></div>
+      ${scenarioPicker()}
       <form id="request-form" novalidate>
         <div class="form-fields">
           <div class="field"><label for="item">Item name</label><div class="input-wrap">${icon('box')}<input id="item" name="item" type="text" maxlength="160" value="${escape(draft.item)}" placeholder="e.g. Office chairs" required aria-describedby="error-item" /></div>${fieldError('item')}</div>
-          <div class="field-grid"><div class="field"><label for="quantity">Quantity</label><div class="input-wrap"><input id="quantity" name="quantity" type="number" min="1" step="1" value="${escape(draft.quantity)}" required aria-describedby="error-quantity" /><span class="input-suffix">units</span></div>${fieldError('quantity')}</div><div class="field"><label for="deadline">Required by</label><div class="input-wrap">${icon('calendar')}<input id="deadline" name="deadline" type="date" value="${escape(draft.deadline)}" required aria-describedby="error-deadline" /></div>${fieldError('deadline')}</div></div>
+          <div class="field-grid"><div class="field"><label for="quantity">Quantity</label><div class="input-wrap"><input id="quantity" name="quantity" type="number" min="1" step="1" value="${escape(draft.quantity)}" required aria-describedby="error-quantity" /><span class="input-suffix" id="quantity-unit">${scenarioForItem(draft.item)?.unitLabel ?? 'units'}</span></div>${fieldError('quantity')}</div><div class="field"><label for="deadline">Required by</label><div class="input-wrap">${icon('calendar')}<input id="deadline" name="deadline" type="date" value="${escape(draft.deadline)}" required aria-describedby="error-deadline" /></div>${fieldError('deadline')}</div></div>
           <div class="field budget-field"><label for="budget">Maximum budget <span class="optional">Optional</span></label><div class="input-wrap"><span class="currency-prefix">$</span><input id="budget" name="budget" type="number" min="0" step="0.01" value="${escape(draft.budget)}" placeholder="No budget limit" aria-describedby="budget-help error-budget" /><span class="input-suffix">USD</span></div><span class="field-help" id="budget-help">Leave blank to compare without a budget limit.</span>${fieldError('budget')}</div>
         </div>
-        <fieldset class="supplier-section" aria-describedby="error-suppliers"><legend>Choose your suppliers <span class="supplier-count" id="supplier-count">${draft.supplierIds.length} selected</span></legend><p>These are the three suppliers in the chair example.</p><div class="supplier-options">${suppliers.map((supplier, index) => `<label class="supplier-option ${draft.supplierIds.includes(supplier.id) ? 'selected' : ''}"><input type="checkbox" name="supplier" value="${supplier.id}" ${draft.supplierIds.includes(supplier.id) ? 'checked' : ''} /><span class="supplier-avatar avatar-${index}">${supplier.initials}</span><span class="supplier-option-name">${escape(supplier.name)}</span><span class="custom-checkbox">${icon('check')}</span></label>`).join('')}</div>${fieldError('suppliers')}</fieldset>
-        <div class="form-bottom"><button class="text-button" id="sample" type="button">${icon('spark')}Use chair example</button><button class="button button-primary" type="submit">Review supplier quotes ${icon('arrow')}</button></div>
+        <fieldset class="supplier-section" aria-describedby="error-suppliers"><legend>Choose your suppliers <span class="supplier-count" id="supplier-count">${draft.supplierIds.length} selected</span></legend><p>${activeScenario.suppliers.length} suppliers for this scenario. Select 3–5 to compare.</p><div class="supplier-options">${activeScenario.suppliers.map((supplier, index) => `<label class="supplier-option ${draft.supplierIds.includes(supplier.id) ? 'selected' : ''}"><input type="checkbox" name="supplier" value="${supplier.id}" ${draft.supplierIds.includes(supplier.id) ? 'checked' : ''} /><span class="supplier-avatar avatar-${index}">${supplier.initials}</span><span class="supplier-option-name">${escape(supplier.name)}</span><span class="custom-checkbox">${icon('check')}</span></label>`).join('')}</div>${fieldError('suppliers')}</fieldset>
+        <div class="form-bottom"><button class="text-button" id="sample" type="button">${icon('spark')}Restore example</button><button class="button button-primary" type="submit">Review supplier quotes ${icon('arrow')}</button></div>
       </form>
     </section>
     <aside class="aside enter" style="--delay: 70ms">
       <section class="guide-panel"><div class="guide-top"><span class="guide-label">A BETTER WAY TO COMPARE</span><span class="guide-orbit">${icon('spark')}</span></div><h2>Price matters.<br>So does the promise.</h2><p class="guide-copy">A low price only helps if the supplier can meet your needs.</p><div class="guide-rules"><div><span class="guide-rule-icon">${icon('box')}</span><span><strong>The right quantity</strong><small>Enough to fulfill your request.</small></span><span class="rule-index">01</span></div><div><span class="guide-rule-icon">${icon('calendar')}</span><span><strong>On time</strong><small>Delivered by your deadline.</small></span><span class="rule-index">02</span></div><div><span class="guide-rule-icon">${icon('money')}</span><span><strong>The lowest feasible price</strong><small>Within your budget, if you set one.</small></span><span class="rule-index">03</span></div></div><div class="guide-bottom"><span class="tiny-dot"></span>Simple rules. No guesswork.</div></section>
-      <section class="sample-note"><span class="sample-note-icon">${icon('info')}</span><div><strong>A small, focused demo</strong><p>Start with 50 office chairs. The supplier quotes are fictional, and nothing is sent externally.</p></div></section>
+      <section class="sample-note"><span class="sample-note-icon">${icon('info')}</span><div><strong>${escape(activeScenario.title)} example</strong><p>${escape(activeScenario.description)}. Quotes cover ${activeScenario.quantity} ${activeScenario.unitLabel}; edit the deadline or budget to explore. Nothing is sent externally.</p></div></section>
     </aside>`;
 }
 
 function requestSummary(): string {
   if (!request) return '';
   const item = request.items[0];
-  return `<section class="summary-panel"><div class="summary-heading"><span class="section-kicker">YOUR REQUEST</span><button class="icon-button" type="button" data-edit aria-label="Edit your request">${icon('edit')}</button></div><h3>${escape(item.name)}</h3><dl><div><dt>Quantity</dt><dd>${item.quantity} units</dd></div><div><dt>Required by</dt><dd>${dateLabel(item.requiredDate, true)}</dd></div><div><dt>Budget</dt><dd>${request.maxBudgetCents === null ? 'No limit set' : money(request.maxBudgetCents)}</dd></div><div><dt>Suppliers</dt><dd>${request.selectedSupplierIds.length} selected</dd></div></dl></section>`;
+  return `<section class="summary-panel"><div class="summary-heading"><span class="section-kicker">YOUR REQUEST</span><button class="icon-button" type="button" data-edit aria-label="Edit your request">${icon('edit')}</button></div><h3>${escape(item.name)}</h3><dl><div><dt>Quantity</dt><dd>${item.quantity} ${item.unitLabel ?? 'units'}</dd></div><div><dt>Required by</dt><dd>${dateLabel(item.requiredDate, true)}</dd></div><div><dt>Budget</dt><dd>${request.maxBudgetCents === null ? 'No limit set' : money(request.maxBudgetCents)}</dd></div><div><dt>Suppliers</dt><dd>${request.selectedSupplierIds.length} selected</dd></div></dl></section>`;
 }
 
 function quoteCard(quote: SupplierQuote, index: number): string {
   const supplier = suppliers.find((value) => value.id === quote.supplierId)!;
   const line = quote.items[0];
-  return `<article class="quote-card" style="--delay: ${index * 55}ms"><div class="quote-card-top"><span class="supplier-avatar avatar-${index}">${supplier.initials}</span><div><h3>${escape(supplier.name)}</h3><span class="quote-reference">QUOTE 0${index + 1}</span></div><span class="response-status"><span></span>Received</span></div><div class="quote-card-body"><div><span class="metric-label">QUOTED TOTAL</span><strong class="quote-price">${money(line.price.cents)}</strong></div><div class="quote-facts"><span>${icon('box')}<span><strong>${line.availableQuantity} units</strong><small>Available quantity</small></span></span><span>${icon('calendar')}<span><strong>${dateLabel(line.expectedDate, true)}</strong><small>Expected delivery</small></span></span></div></div></article>`;
+  return `<article class="quote-card" style="--delay: ${index * 55}ms"><div class="quote-card-top"><span class="supplier-avatar avatar-${index}">${supplier.initials}</span><div><h3>${escape(supplier.name)}</h3><span class="quote-reference">QUOTE 0${index + 1}</span></div><span class="response-status"><span></span>Received</span></div><div class="quote-card-body"><div><span class="metric-label">QUOTED TOTAL</span><strong class="quote-price">${money(line.price.cents)}</strong></div><div class="quote-facts"><span>${icon('box')}<span><strong>${line.availableQuantity} ${request!.items[0].unitLabel ?? 'units'}</strong><small>Available quantity</small></span></span><span>${icon('calendar')}<span><strong>${dateLabel(line.expectedDate, true)}</strong><small>Expected delivery</small></span></span></div></div></article>`;
 }
 
 function quotesView(): string {
-  return `<section class="panel quotes-panel enter"><div class="panel-heading"><div><div class="section-kicker">THE OFFERS ARE IN</div><h2 class="section-title" tabindex="-1">A closer look at your quotes.</h2><p>Compare the facts before making the call.</p></div><span class="section-symbol">${icon('list')}</span></div><div class="inline-notice">${icon('info')}<span>Demo responses for 50 office chairs. No suppliers were contacted.</span></div>${quotes.length ? `<div class="quote-list">${quotes.map(quoteCard).join('')}</div><p class="quote-convention">Quoted totals are in USD and assumed to include all charges.</p><div class="panel-actions"><button type="button" class="text-button" data-edit>${icon('back')}Edit request</button><button class="button button-primary" id="compare" type="button">Find the best supplier ${icon('arrow')}</button></div>` : `<div class="empty-state"><span class="empty-icon">${icon('box')}</span><h3>No demo quotes for this request.</h3><p>The sample responses apply to 50 office chairs. We won't reuse those prices for a different item or quantity.</p><button class="button button-primary" id="restore-sample" type="button">Use the chair example ${icon('arrow')}</button><button class="text-button" data-edit type="button">${icon('back')}Edit your request</button></div>`}</section><aside class="aside enter" style="--delay: 70ms">${requestSummary()}<section class="quiet-note">${icon('shield')}<h3>Facts first. Decisions second.</h3><p>We'll check quantity, delivery, and your optional budget, then compare the quotes that qualify.</p><span class="note-rule">Lowest price → earlier delivery if tied</span></section></aside>`;
+  return `<section class="panel quotes-panel enter"><div class="panel-heading"><div><div class="section-kicker">THE OFFERS ARE IN</div><h2 class="section-title" tabindex="-1">A closer look at your quotes.</h2><p>Compare the facts before making the call.</p></div><span class="section-symbol">${icon('list')}</span></div><div class="inline-notice">${icon('info')}<span>Fictional quotes · ${activeScenario.quantity} ${activeScenario.unitLabel} · ${escape(activeScenario.description)}. No suppliers contacted.</span></div>${quotes.length ? `<div class="quote-list">${quotes.map(quoteCard).join('')}</div><p class="quote-convention">Quoted totals are in USD and assumed to include all charges.</p><div class="panel-actions"><button type="button" class="text-button" data-edit>${icon('back')}Edit request</button><button class="button button-primary" id="compare" type="button">Find the best supplier ${icon('arrow')}</button></div>` : `<div class="empty-state"><span class="empty-icon">${icon('box')}</span><h3>No demo quotes for this request.</h3><p>This example has quotes for ${activeScenario.quantity} ${activeScenario.unitLabel} (${escape(activeScenario.itemName)}). Restore it below, or edit your request and choose another scenario. Sample prices are never reused for a different item or quantity.</p><button class="button button-primary" id="restore-sample" type="button">Restore ${escape(activeScenario.title.toLowerCase())} example ${icon('arrow')}</button><button class="text-button" data-edit type="button">${icon('back')}Edit your request</button></div>`}</section><aside class="aside enter" style="--delay: 70ms">${requestSummary()}<section class="quiet-note">${icon('shield')}<h3>Facts first. Decisions second.</h3><p>We'll check quantity, delivery, and your optional budget, then compare the quotes that qualify.</p><span class="note-rule">Lowest price → earlier delivery if tied</span></section></aside>`;
 }
 
 function evaluationRow(value: Evaluation, index: number): string {
@@ -120,7 +126,7 @@ function evaluationRow(value: Evaluation, index: number): string {
   const status = recommended ? result.outcome === 'tied' ? 'Tied best' : 'Recommended' : value.feasible ? 'Feasible' : 'Not feasible';
   const quantityPass = value.availableQuantity >= item.quantity;
   const datePass = value.expectedDate <= item.requiredDate;
-  return `<article class="evaluation-row ${recommended ? 'is-recommended' : ''} ${!value.feasible ? 'is-rejected' : ''}" style="--delay:${index * 45}ms"><div class="evaluation-top"><div class="supplier-identity"><span class="supplier-avatar avatar-${index}">${supplier.initials}</span><div><h3>${escape(supplier.name)}</h3><span class="status-pill ${recommended ? 'recommended' : value.feasible ? 'feasible' : 'rejected'}">${icon(recommended ? 'checkCircle' : value.feasible ? 'check' : 'minus')}${status}</span></div></div><strong class="evaluation-price">${money(value.totalCents)}</strong></div><div class="evaluation-facts"><span class="fact ${quantityPass ? '' : 'failed'}">${icon(quantityPass ? 'check' : 'x')}${value.availableQuantity} of ${item.quantity} units</span><span class="fact ${datePass ? '' : 'failed'}">${icon(datePass ? 'check' : 'x')}Delivery ${dateLabel(value.expectedDate, true)}</span>${request.maxBudgetCents !== null ? `<span class="fact ${value.totalCents <= request.maxBudgetCents ? '' : 'failed'}">${icon(value.totalCents <= request.maxBudgetCents ? 'check' : 'x')}${value.totalCents <= request.maxBudgetCents ? 'Within budget' : 'Over budget'}</span>` : ''}</div><p class="evaluation-reason">${escape(evaluationReason(value, result, request))}</p></article>`;
+  return `<article class="evaluation-row ${recommended ? 'is-recommended' : ''} ${!value.feasible ? 'is-rejected' : ''}" style="--delay:${index * 45}ms"><div class="evaluation-top"><div class="supplier-identity"><span class="supplier-avatar avatar-${index}">${supplier.initials}</span><div><h3>${escape(supplier.name)}</h3><span class="status-pill ${recommended ? 'recommended' : value.feasible ? 'feasible' : 'rejected'}">${icon(recommended ? 'checkCircle' : value.feasible ? 'check' : 'minus')}${status}</span></div></div><strong class="evaluation-price">${money(value.totalCents)}</strong></div><div class="evaluation-facts"><span class="fact ${quantityPass ? '' : 'failed'}">${icon(quantityPass ? 'check' : 'x')}${value.availableQuantity} of ${item.quantity} ${item.unitLabel ?? 'units'}</span><span class="fact ${datePass ? '' : 'failed'}">${icon(datePass ? 'check' : 'x')}Delivery ${dateLabel(value.expectedDate, true)}</span>${request.maxBudgetCents !== null ? `<span class="fact ${value.totalCents <= request.maxBudgetCents ? '' : 'failed'}">${icon(value.totalCents <= request.maxBudgetCents ? 'check' : 'x')}${value.totalCents <= request.maxBudgetCents ? 'Within budget' : 'Over budget'}</span>` : ''}</div><p class="evaluation-reason">${escape(evaluationReason(value, result, request))}</p></article>`;
 }
 
 function decisionAside(): string {
@@ -140,7 +146,7 @@ function resultsView(): string {
   const tied = result.outcome === 'tied';
   let banner: string;
   if (best) {
-    banner = `<div class="winner-banner"><div class="winner-label">${icon('checkCircle')} ${tied ? 'TIED CHEAPEST FEASIBLE QUOTES' : 'YOUR RECOMMENDED SUPPLIER'}</div><div class="winner-main"><div><h3>${escape(tied ? result.recommendedSupplierIds.map(supplierName).join(' & ') : supplierName(best.supplierId))}</h3><p>${tied ? 'Same price and delivery date. Choose either for the full order.' : `${request.items[0].quantity} units · Delivery ${dateLabel(best.expectedDate, true)}`}</p></div><div class="winner-cost"><strong>${money(best.totalCents)}</strong><span>quoted total</span></div></div>${savings > 0 ? `<div class="winner-saving">${icon('spark')} ${money(savings)} less than the next feasible quote</div>` : '<div class="winner-saving">'+icon('check')+' The lowest price that meets your requirements</div>'}</div>`;
+    banner = `<div class="winner-banner"><div class="winner-label">${icon('checkCircle')} ${tied ? 'TIED CHEAPEST FEASIBLE QUOTES' : 'YOUR RECOMMENDED SUPPLIER'}</div><div class="winner-main"><div><h3>${escape(tied ? result.recommendedSupplierIds.map(supplierName).join(' & ') : supplierName(best.supplierId))}</h3><p>${tied ? 'Same price and delivery date. Choose either for the full order.' : `${request.items[0].quantity} ${request.items[0].unitLabel ?? 'units'} · Delivery ${dateLabel(best.expectedDate, true)}`}</p></div><div class="winner-cost"><strong>${money(best.totalCents)}</strong><span>quoted total</span></div></div>${savings > 0 ? `<div class="winner-saving">${icon('spark')} ${money(savings)} less than the next feasible quote</div>` : '<div class="winner-saving">'+icon('check')+' The lowest price that meets your requirements</div>'}</div>`;
   } else {
     banner = `<div class="no-winner-banner"><span class="empty-icon">${icon('info')}</span><div><h3>No quote meets every requirement.</h3><p>Review the reasons below, then adjust your request or supplier set.</p></div></div>`;
   }
@@ -174,8 +180,9 @@ function editRequest(): void {
   render(true);
 }
 
-function loadExample(goToQuotes = false): void {
-  draft = sampleDraft();
+function loadExample(goToQuotes = false, scenarioId = activeScenario.id, focusPicker = false): void {
+  activeScenario = scenarios.find((scenario) => scenario.id === scenarioId)!;
+  draft = sampleDraft(activeScenario.id);
   request = null;
   quotes = [];
   result = null;
@@ -186,16 +193,19 @@ function loadExample(goToQuotes = false): void {
     step = 2;
   }
   render(goToQuotes);
-  showToast('Chair example loaded. You’re ready to compare.');
+  if (focusPicker) workspace.querySelector<HTMLButtonElement>(`[data-scenario="${activeScenario.id}"]`)?.focus({ preventScroll: true });
+  showToast(`${activeScenario.title} example loaded. You’re ready to compare.`);
 }
 
 function bindStep(): void {
   workspace.querySelectorAll<HTMLButtonElement>('[data-edit]').forEach((button) => button.addEventListener('click', editRequest));
   if (step === 1) {
+    workspace.querySelectorAll<HTMLButtonElement>('[data-scenario]').forEach((button) => button.addEventListener('click', () => loadExample(false, button.dataset.scenario!, true)));
     const form = document.querySelector<HTMLFormElement>('#request-form')!;
     form.addEventListener('input', (event) => {
       draft = readDraft(form);
       const target = event.target as HTMLInputElement;
+      if (target.id === 'item') document.querySelector('#quantity-unit')!.textContent = scenarioForItem(draft.item)?.unitLabel ?? 'units';
       target.setAttribute('aria-invalid', 'false');
       target.closest('.field')?.classList.remove('invalid');
       const error = document.querySelector(`#error-${target.name === 'supplier' ? 'suppliers' : target.id}`);

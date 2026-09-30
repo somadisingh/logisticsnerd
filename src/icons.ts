@@ -1,4 +1,6 @@
 const paths: Record<string, string> = {
+  chair: '<path d="M6 14V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v9M5 14h14v4H5zM7 18v3m10-3v3M3 10v4h18v-4"/>',
+  paper: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9l-6-6Zm0 0v6h6M8 13h8m-8 4h5"/>',
   arrow: '<path d="M5 12h14m-6-6 6 6-6 6"/>',
   back: '<path d="M19 12H5m6-6-6 6 6 6"/>',
   check: '<path d="m5 12 4 4L19 6"/>',

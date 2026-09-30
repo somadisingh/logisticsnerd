@@ -3,6 +3,7 @@ export interface RequestedItem {
   name: string;
   quantity: number;
   requiredDate: string;
+  unitLabel?: string;
 }
 
 export interface ProcurementRequest {

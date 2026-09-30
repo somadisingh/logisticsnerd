@@ -1,0 +1,29 @@
+{
+  "chair_suppliers": [
+    { "id": "workspace", "name": "Workspace Essentials", "initials": "WE", "contact_info": "quotes@workspace.example", "available_quantity": 50, "total_price": 5800, "expected_delivery_date": "2026-10-13" },
+    { "id": "atelier", "name": "Atelier Office Co.", "initials": "AO", "contact_info": "quotes@atelier.example", "available_quantity": 50, "total_price": 4800, "expected_delivery_date": "2026-10-18" }
+  ],
+  "additional": [
+    {
+      "id": "paper", "title": "Printer paper", "description": "A4 paper · 500 sheets per ream", "lesson": "When the cheapest quote arrives too late.", "unit_label": "reams",
+      "item_name": "Printer paper", "quantity": 100, "required_delivery_date": "2026-10-08", "max_budget": 650,
+      "suppliers": [
+        { "id": "paper-value", "name": "Value Paper Depot", "initials": "VP", "contact_info": "quotes@valuepaper.example", "available_quantity": 100, "total_price": 420, "expected_delivery_date": "2026-10-10" },
+        { "id": "paper-everyday", "name": "Everyday Office Supply", "initials": "EO", "contact_info": "quotes@everyday.example", "available_quantity": 100, "total_price": 480, "expected_delivery_date": "2026-10-07" },
+        { "id": "paper-express", "name": "Paper Express Co.", "initials": "PE", "contact_info": "quotes@paperexpress.example", "available_quantity": 100, "total_price": 590, "expected_delivery_date": "2026-10-05" },
+        { "id": "paper-local", "name": "Local Stationery Co.", "initials": "LS", "contact_info": "quotes@localstationery.example", "available_quantity": 70, "total_price": 450, "expected_delivery_date": "2026-10-06" }
+      ]
+    },
+    {
+      "id": "boxes", "title": "Packaging boxes", "description": "Medium cartons · 12 × 9 × 6 inches", "lesson": "Earlier delivery comes at a higher price.", "unit_label": "boxes",
+      "item_name": "Packaging boxes", "quantity": 200, "required_delivery_date": "2026-10-12", "max_budget": 400,
+      "suppliers": [
+        { "id": "boxes-carton", "name": "Carton Collective", "initials": "CC", "contact_info": "quotes@carton.example", "available_quantity": 200, "total_price": 280, "expected_delivery_date": "2026-10-11" },
+        { "id": "boxes-quick", "name": "QuickPack Supply", "initials": "QP", "contact_info": "quotes@quickpack.example", "available_quantity": 200, "total_price": 350, "expected_delivery_date": "2026-10-06" },
+        { "id": "boxes-budget", "name": "Budget Box Works", "initials": "BB", "contact_info": "quotes@budgetbox.example", "available_quantity": 150, "total_price": 240, "expected_delivery_date": "2026-10-09" },
+        { "id": "boxes-premier", "name": "Premier Packaging", "initials": "PP", "contact_info": "quotes@premierpackaging.example", "available_quantity": 200, "total_price": 430, "expected_delivery_date": "2026-10-05" },
+        { "id": "boxes-standard", "name": "Standard Pack Co.", "initials": "SP", "contact_info": "quotes@standardpack.example", "available_quantity": 200, "total_price": 310, "expected_delivery_date": "2026-10-10" }
+      ]
+    }
+  ]
+}

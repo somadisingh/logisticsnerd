@@ -5,7 +5,9 @@ import { dateLabel, evaluationReason, rejectionText } from '../src/domain/reason
 import { isCalendarDate, parseMoney, validateDraft } from '../src/domain/validate';
 
 function fixture() {
-  const request = requestFromDraft(sampleDraft());
+  const draft = sampleDraft();
+  draft.supplierIds = ['metro', 'comfort', 'budget'];
+  const request = requestFromDraft(draft);
   return { request, quotes: mockQuotes(request) };
 }
 
