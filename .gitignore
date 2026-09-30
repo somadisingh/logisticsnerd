@@ -1,2 +1,11 @@
 # Local research and build planning requested for this project.
 /.local-planning/
+
+# Dependencies, build output, and local files.
+node_modules/
+dist/
+coverage/
+.DS_Store
+.env
+.env.*
+!.env.example

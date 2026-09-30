@@ -1,0 +1,25 @@
+{
+  "buyer": { "id": "buyer-demo", "name": "Office manager", "business_name": "Co-working space" },
+  "request": {
+    "id": "request-chairs", "buyer_id": "buyer-demo", "created_at": "2026-09-29T12:00:00Z",
+    "max_budget": 6000, "selected_supplier_ids": ["metro", "comfort", "budget"]
+  },
+  "requested_items": [
+    { "id": "item-chairs", "request_id": "request-chairs", "item_name": "Office chairs", "quantity": 50, "required_delivery_date": "2026-10-15" }
+  ],
+  "suppliers": [
+    { "id": "metro", "name": "Metro Office Supply", "initials": "MO", "contact_info": "quotes@metro.example" },
+    { "id": "comfort", "name": "Comfort Seating Co.", "initials": "CS", "contact_info": "quotes@comfort.example" },
+    { "id": "budget", "name": "Budget Furnish LLC", "initials": "BF", "contact_info": "quotes@budget.example" }
+  ],
+  "supplier_quotes": [
+    { "id": "quote-metro", "request_id": "request-chairs", "supplier_id": "metro", "submitted_at": "2026-09-29T13:00:00Z", "notes": "" },
+    { "id": "quote-comfort", "request_id": "request-chairs", "supplier_id": "comfort", "submitted_at": "2026-09-29T13:00:00Z", "notes": "" },
+    { "id": "quote-budget", "request_id": "request-chairs", "supplier_id": "budget", "submitted_at": "2026-09-29T13:00:00Z", "notes": "" }
+  ],
+  "quote_items": [
+    { "quote_id": "quote-metro", "requested_item_id": "item-chairs", "item_name": "Office chairs", "available_quantity": 50, "total_price": 4500, "expected_delivery_date": "2026-10-12" },
+    { "quote_id": "quote-comfort", "requested_item_id": "item-chairs", "item_name": "Office chairs", "available_quantity": 50, "total_price": 5200, "expected_delivery_date": "2026-10-10" },
+    { "quote_id": "quote-budget", "requested_item_id": "item-chairs", "item_name": "Office chairs", "available_quantity": 35, "total_price": 3800, "expected_delivery_date": "2026-10-14" }
+  ]
+}
