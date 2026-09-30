@@ -124,7 +124,37 @@ If an LLM is used, the brief limits it to extracting structured request fields f
 - [tests/compare.test.ts](tests/compare.test.ts): business-rule and input-validation checks.
 - [tests/scenarios.test.ts](tests/scenarios.test.ts): scenario winners, changes to constraints, quote isolation, and preservation of the original data.
 - [tests/preferences.test.ts](tests/preferences.test.ts): both ranking preferences, tie rules, shared feasibility constraints, and price/delivery explanations.
+- [shipping-lab.html](shipping-lab.html): an experimental comparison page for SMKlog, EasyPost, and AfterShip.
+- [server/shipping.mjs](server/shipping.mjs): server-only shipping adapters, input checks, normalization, and request caching.
+- [tests/shipping.test.mjs](tests/shipping.test.mjs): simulated provider contracts and failure handling; no live requests in the automated suite.
 
-Verification includes 54 automated checks, TypeScript checking, a production build, and browser walkthroughs of all three scenarios, preference switching, retained form edits, changed deadlines and budgets, unsupported quantities, supplier selection, keyboard controls, and mobile layouts.
+Verification includes 83 automated checks, TypeScript checking, a production build, and browser walkthroughs of all three scenarios, preference switching, retained form edits, changed deadlines and budgets, unsupported quantities, supplier selection, keyboard controls, and mobile layouts. Simulated API tests validate integration behavior; they do not establish provider reliability or prediction accuracy.
+
+## Shipping API comparison experiment
+
+Open `/shipping-lab.html` on the running local dev or preview server. The page compares **one packed US domestic parcel** independently of seller prices. It uses hypothetical sample measurements that can be replaced with actual measurements. It does not modify the supplier ranking or buy shipping labels.
+
+1. Copy `.env.example` to `.env.local` (if a local file already exists, preserve it).
+2. Add an **EasyPost test API key** as `EASYPOST_TEST_API_KEY`. The adapter retrieves rates and attempts SmartRate delivery prediction for the planned pickup date. A denied prediction call leaves rates usable and deadline suitability unknown.
+3. Add `AFTERSHIP_API_KEY`; set `AFTERSHIP_EDD_ENABLED=true` only after AfterShip activates delivery prediction for that account.
+4. The initial live SMKlog probe returned **HTTP 403 / Cloudflare error 1010** with an instruction not to retry. `SMKLOG_ENABLED` therefore defaults to `false`. Set it to `true` only after provider access is restored.
+5. Click **Check setup**, select ready providers, edit parcel inputs, then **Run API comparison**.
+
+Keys remain on the local server. Never use `VITE_` prefixes for credentials. The server reads `.env.local` again for setup checks and requests, so adding credentials does not require rebuilding. This experimental middleware works with `npm run dev` and `npm run preview`; uploading `dist/` to static hosting alone will not provide these API endpoints.
+
+For a terminal comparison:
+
+```sh
+npm run test:shipping
+npm run test:shipping -- --providers=easypost,aftership
+# Optional: a local JSON file with the parcel fields used in src/shipping-lab.ts
+npm run test:shipping -- path/to/parcel.json --providers=easypost
+```
+
+The CLI saves normalized results in the gitignored `.local-planning/api-research/shipping-tests/` folder. Browser results stay in memory. Identical requests are cached for ten minutes in the local server session; access denials and rate limits stop further calls to that provider until configuration changes or the server restarts. There is no polling or automatic retry.
+
+SMKlog does not accept our planned pickup date, so its reported dates are displayed separately without deciding deadline suitability. EasyPost deadlines use only predictions explicitly anchored to the requested pickup date. AfterShip deadline checks use the latest supplied date in its estimate window. Missing dates remain unknown; predicted dates are not supplier promises. EasyPost test mode cannot be used to compare live prices or delivery accuracy against the other two providers.
+
+**Live comparison status:** SMKlog was probed and denied access. EasyPost and AfterShip authenticated tests await credentials. No winning provider has been established. See the official [SMKlog guide](https://smklog.com/api), [EasyPost shipment API](https://docs.easypost.com/docs/shipments), [SmartRate delivery dates](https://docs.easypost.com/docs/shipments/shipping-smartrate), and [AfterShip prediction API](https://www.aftership.com/docs/tracking/1o2zu0jrca785-prediction-for-the-estimated-delivery-date).
 
 Local research and build-planning documents are intentionally excluded from version control by `.gitignore`.

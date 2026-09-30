@@ -7,7 +7,8 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "vitest run"
+    "test": "vitest run",
+    "test:shipping": "node scripts/probe-shipping.mjs"
   },
   "dependencies": {
     "@fontsource-variable/dm-sans": "5.3.0"
