@@ -1,5 +1,5 @@
 const ENDPOINT = 'https://inference.baseten.co/v1/chat/completions';
-const PROMPT_VERSION = 'procurement-estimates-v2';
+const PROMPT_VERSION = 'procurement-estimates-v3';
 const CACHE_MS = 10 * 60 * 1000;
 export const MODEL_CONFIGS = [
   { id: 'deepseek', model: 'deepseek-ai/DeepSeek-V4.1-Flash', keyName: 'BASETEN_DEEPSEEK_API_KEY', reasoningEffort: 'none' },
@@ -13,6 +13,7 @@ export class EstimateError extends Error {
 const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
 const boundedString = (value, max = 200) => typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 const integer = (value, max) => Number.isSafeInteger(value) && value >= 0 && value <= max;
+const normalizedText = (value) => value.trim().replace(/\s+/g, ' ');
 function calendarDate(value) {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
   const date = new Date(`${value}T00:00:00Z`);
@@ -40,7 +41,7 @@ export function validateEstimateInput(body, catalog, validateComparisonInput) {
   const request = {
     id: source.id, buyerId: source.buyerId, createdAt: source.createdAt, maxBudgetCents: source.maxBudgetCents,
     selectedSupplierIds: [...selected],
-    items: [{ id: item.id, name: item.name.trim(), quantity: item.quantity, requiredDate: item.requiredDate, unitLabel: item.unitLabel ?? 'units' }],
+    items: [{ id: item.id, name: normalizedText(item.name), quantity: item.quantity, requiredDate: item.requiredDate, unitLabel: normalizedText(item.unitLabel ?? 'units') }],
   };
   try { validateComparisonInput(request, []); } catch { fail(); }
   return { request, preference: body.preference, suppliers: selected.map((id) => ({ id, name: trusted.get(id).name })) };
@@ -80,8 +81,8 @@ The buyer's budget and deadline are constraints, not evidence of price, stock, o
 For estimated status, clarification must be null and quotes must contain every selected supplier exactly once. For needs_clarification status, clarification is a nonempty short question and quotes is empty.` },
     { role: 'user', content: JSON.stringify({
       as_of_date: asOfDate,
-      request: { item: item.name, unit: item.unitLabel, quantity: item.quantity, required_date: item.requiredDate, max_budget_cents: input.request.maxBudgetCents },
-      suppliers: input.suppliers,
+      request: { item: item.name, unit: item.unitLabel, quantity: item.quantity },
+      suppliers: [...input.suppliers].sort((a, b) => a.id.localeCompare(b.id)),
       purchasing_preferences: ['lowest_cost', 'earliest_delivery'],
       demo_assumptions: ['USD', 'standard-quality comparable goods', 'domestic US delivery', 'all charges included in total'],
     }) },
@@ -153,9 +154,39 @@ async function callModel(config, key, input, asOfDate, fetcher, timeoutMs, outer
   return { output: validateModelOutput(output, input, asOfDate), usage: { inputTokens: Number.isSafeInteger(usage?.prompt_tokens) ? usage.prompt_tokens : null, outputTokens: Number.isSafeInteger(usage?.completion_tokens) ? usage.completion_tokens : null } };
 }
 
-export function createEstimateRunner({ env = {}, fetcher = fetch, rules, catalog, now = () => new Date(), timeoutMs = 18000, overallTimeoutMs = 45000 }) {
+function abortableDelay(milliseconds, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) return reject(new EstimateError('cancelled', 'Estimate request cancelled.', 499));
+    const cancel = () => { clearTimeout(timer); signal.removeEventListener('abort', cancel); reject(new EstimateError('cancelled', 'Estimate request cancelled.', 499)); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', cancel); resolve(); }, milliseconds);
+    signal.addEventListener('abort', cancel, { once: true });
+  });
+}
+
+function subscribeToGeneration(entry, signal) {
+  entry.subscribers += 1;
+  return new Promise((resolve, reject) => {
+    let detached = false;
+    const detach = () => {
+      if (detached) return;
+      detached = true;
+      signal?.removeEventListener('abort', cancel);
+      entry.subscribers -= 1;
+      if (!entry.subscribers && !entry.settled) entry.controller.abort();
+    };
+    const cancel = () => { detach(); reject(new EstimateError('cancelled', 'Estimate request cancelled.', 499)); };
+    if (signal?.aborted) { cancel(); return; }
+    signal?.addEventListener('abort', cancel, { once: true });
+    entry.promise.then((value) => { if (!detached) { detach(); resolve(value); } }, (error) => { if (!detached) { detach(); reject(error); } });
+  });
+}
+
+export function createEstimateRunner({ env = {}, fetcher = fetch, rules, catalog, now = () => new Date(), timeoutMs = 18000, overallTimeoutMs = 45000, maxConcurrentGenerations = 2 }) {
   const getEnv = typeof env === 'function' ? env : () => env;
   const cache = new Map();
+  // Pending work is separate: eviction of a saved result cannot duplicate a call.
+  const pending = new Map();
+  let activeGenerations = 0;
   let signature;
   let cooldownUntil = 0;
   return async (body, { modelIds, bypassCache = false, signal } = {}) => {
@@ -163,58 +194,86 @@ export function createEstimateRunner({ env = {}, fetcher = fetch, rules, catalog
     const input = validateEstimateInput(body, catalog, rules.validateComparisonInput);
     const settings = getEnv();
     const nextSignature = JSON.stringify([settings.BASETEN_MODEL_ORDER, ...MODEL_CONFIGS.map((model) => settings[model.keyName])]);
-    if (signature !== nextSignature) { cache.clear(); cooldownUntil = 0; signature = nextSignature; }
+    if (signature !== nextSignature) {
+      cache.clear(); cooldownUntil = 0; signature = nextSignature;
+      for (const entry of pending.values()) entry.controller.abort();
+      pending.clear();
+    }
     const models = modelOrder(settings, modelIds);
     if (!models.length) throw new EstimateError('needs_credentials', 'Add a Baseten key to .env.local to generate estimates, or choose sample data.', 503);
     const asOfDate = now().toISOString().slice(0, 10);
     const item = input.request.items[0];
     // Constraints and preference change comparisons, not the hypothetical facts.
-    const cacheKey = JSON.stringify([PROMPT_VERSION, asOfDate, item.name.toLowerCase(), item.unitLabel, item.quantity, [...input.suppliers].sort((a, b) => a.id.localeCompare(b.id)), modelIds ?? null]);
+    const cacheKey = JSON.stringify([PROMPT_VERSION, asOfDate, item.name.toLowerCase(), item.unitLabel.toLowerCase(), item.quantity, [...input.suppliers].sort((a, b) => a.id.localeCompare(b.id)), modelIds ?? null]);
     const existing = !bypassCache && cache.get(cacheKey);
-    let entry = existing && existing.expiresAt > now().getTime() ? existing : null;
-    const cached = !!entry;
-    if (!entry) {
-      if (Date.now() < cooldownUntil) throw new EstimateError('rate_limited', 'Baseten requested a pause. Try again shortly.', 503);
-      const pending = (async () => {
-        const startedAt = Date.now();
-        const deadline = startedAt + overallTimeoutMs;
-        const overallSignal = signal ? AbortSignal.any([AbortSignal.timeout(overallTimeoutMs), signal]) : AbortSignal.timeout(overallTimeoutMs);
-        const attempts = [];
-        let lastError = new EstimateError('provider_unavailable', 'No model could generate valid estimates. Please retry.', 503);
-        for (const model of models) {
-          const remaining = deadline - Date.now();
-          if (remaining <= 0) break;
-          const started = Date.now();
-          try {
-            const result = await callModel(model, settings[model.keyName].trim(), input, asOfDate, fetcher, Math.min(timeoutMs, remaining), overallSignal);
-            attempts.push({ model: model.model, status: 'ok', durationMs: Date.now() - started });
-            return { ...result, model: model.model, generatedAt: now().toISOString(), durationMs: Date.now() - startedAt, attempts };
-          } catch (error) {
-            if (signal?.aborted) throw new EstimateError('cancelled', 'Estimate request cancelled.', 499);
-            lastError = error instanceof EstimateError ? error : invalidOutput();
-            attempts.push({ model: model.model, status: lastError.code, durationMs: Date.now() - started, httpStatus: lastError.httpStatus ?? null });
-            if (['auth_failed', 'billing_failed', 'config_error'].includes(lastError.code)) break;
-            if (Number.isFinite(lastError.retryAfterMs) && lastError.retryAfterMs > 0) {
-              cooldownUntil = Math.max(cooldownUntil, Date.now() + lastError.retryAfterMs);
-              if (lastError.retryAfterMs >= deadline - Date.now()) break;
-              await new Promise((resolve) => setTimeout(resolve, lastError.retryAfterMs));
-            } else if (['rate_limited', 'provider_unavailable'].includes(lastError.code) && deadline - Date.now() > 250) {
-              await new Promise((resolve) => setTimeout(resolve, 250));
+    let generated;
+    let cached = !!existing && existing.expiresAt > now().getTime();
+    if (cached) {
+      generated = existing.generated;
+      // Bounded least-recently-used saved facts, without refreshing their expiry.
+      cache.delete(cacheKey); cache.set(cacheKey, existing);
+    } else {
+      if (existing) cache.delete(cacheKey);
+      let entry = pending.get(cacheKey);
+      if (entry?.controller.signal.aborted) entry = null;
+      cached = !!entry;
+      if (!entry) {
+        if (Date.now() < cooldownUntil) throw new EstimateError('rate_limited', 'Baseten requested a pause. Try again shortly.', 503);
+        if (activeGenerations >= maxConcurrentGenerations) throw new EstimateError('busy', 'Other estimates are being generated. Please retry shortly.', 429);
+        entry = { controller: new AbortController(), subscribers: 0, settled: false, promise: null };
+        const shared = entry;
+        activeGenerations += 1;
+        const generation = (async () => {
+          const startedAt = Date.now();
+          const deadline = startedAt + overallTimeoutMs;
+          const overallSignal = AbortSignal.any([AbortSignal.timeout(overallTimeoutMs), shared.controller.signal]);
+          const attempts = [];
+          let lastError = new EstimateError('provider_unavailable', 'No model could generate valid estimates. Please retry.', 503);
+          for (const model of models) {
+            const remaining = deadline - Date.now();
+            if (remaining <= 0) break;
+            const started = Date.now();
+            try {
+              const result = await callModel(model, settings[model.keyName].trim(), input, asOfDate, fetcher, Math.min(timeoutMs, remaining), overallSignal);
+              if (shared.controller.signal.aborted) throw new EstimateError('cancelled', 'Estimate request cancelled.', 499);
+              attempts.push({ model: model.model, status: 'ok', durationMs: Date.now() - started });
+              const generatedAt = now();
+              return { ...result, model: model.model, generatedAt: generatedAt.toISOString(), asOfDate, expiresAt: generatedAt.getTime() + CACHE_MS, durationMs: Date.now() - startedAt, attempts };
+            } catch (error) {
+              if (shared.controller.signal.aborted) throw new EstimateError('cancelled', 'Estimate request cancelled.', 499);
+              lastError = error instanceof EstimateError ? error : invalidOutput();
+              attempts.push({ model: model.model, status: lastError.code, durationMs: Date.now() - started, httpStatus: lastError.httpStatus ?? null });
+              if (['auth_failed', 'billing_failed', 'config_error'].includes(lastError.code)) break;
+              if (Number.isFinite(lastError.retryAfterMs) && lastError.retryAfterMs > 0) {
+                cooldownUntil = Math.max(cooldownUntil, Date.now() + lastError.retryAfterMs);
+                if (lastError.retryAfterMs >= deadline - Date.now()) break;
+                await abortableDelay(lastError.retryAfterMs, overallSignal);
+              } else if (['rate_limited', 'provider_unavailable'].includes(lastError.code) && deadline - Date.now() > 250) {
+                await abortableDelay(250, overallSignal);
+              }
             }
           }
-        }
-        lastError.attempts = attempts;
-        throw lastError;
-      })();
-      entry = { promise: pending, expiresAt: now().getTime() + CACHE_MS };
-      if (!bypassCache) {
-        for (const [key, value] of cache) if (value.expiresAt <= now().getTime()) cache.delete(key);
-        if (cache.size >= 100) cache.delete(cache.keys().next().value);
-        cache.set(cacheKey, entry);
-        pending.catch(() => { if (cache.get(cacheKey) === entry) cache.delete(cacheKey); });
+          lastError.attempts = attempts;
+          throw lastError;
+        })();
+        shared.promise = generation.then((value) => {
+          if (!bypassCache && !shared.controller.signal.aborted && signature === nextSignature && now().toISOString().slice(0, 10) === asOfDate) {
+            for (const [key, saved] of cache) if (saved.expiresAt <= now().getTime()) cache.delete(key);
+            if (cache.size >= 100) cache.delete(cache.keys().next().value);
+            cache.set(cacheKey, { generated: value, expiresAt: value.expiresAt });
+          }
+          return value;
+        }).finally(() => {
+          shared.settled = true;
+          activeGenerations -= 1;
+          if (pending.get(cacheKey) === shared) pending.delete(cacheKey);
+        });
+        // A cancelled last subscriber still leaves a safely handled promise.
+        shared.promise.catch(() => {});
+        pending.set(cacheKey, shared);
       }
+      generated = await subscribeToGeneration(entry, signal);
     }
-    const generated = await entry.promise;
     if (signal?.aborted) throw new EstimateError('cancelled', 'Estimate request cancelled.', 499);
     if (generated.output.status === 'needs_clarification') {
       const error = new EstimateError('needs_clarification', generated.output.clarification, 422);
@@ -229,7 +288,7 @@ export function createEstimateRunner({ env = {}, fetcher = fetch, rules, catalog
     return {
       quotes,
       comparisons: { lowest_cost: rules.compareQuotes(input.request, quotes, 'lowest_cost'), earliest_delivery: rules.compareQuotes(input.request, quotes, 'earliest_delivery') },
-      provenance: { kind: 'ai_estimate', model: generated.model, generatedAt: generated.generatedAt, cached, durationMs: generated.durationMs, usage: generated.usage, attempts: generated.attempts },
+      provenance: { kind: 'ai_estimate', model: generated.model, generatedAt: generated.generatedAt, expiresAt: new Date(generated.expiresAt).toISOString(), cacheVersion: PROMPT_VERSION, asOfDate: generated.asOfDate, cached, durationMs: generated.durationMs, usage: generated.usage, attempts: generated.attempts },
       assumptions: [...generated.output.assumptions],
     };
   };

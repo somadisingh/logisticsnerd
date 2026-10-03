@@ -1,11 +1,14 @@
 import { compareQuotes } from './domain/compare';
 import type { ComparisonResult, ProcurementRequest, PurchasingPreference, SupplierQuote } from './domain/model';
+import { validateComparisonInput } from './domain/validate';
 
 export interface EstimateProvenance {
   kind: 'ai_estimate';
   model: string;
   generatedAt: string;
   cached: boolean;
+  expiresAt?: string;
+  cacheVersion?: string;
 }
 
 export interface EstimateResponse {
@@ -41,6 +44,8 @@ export function validateEstimateResponse(value: unknown, request: ProcurementReq
     const provenance = value.provenance;
     if (!object(provenance) || provenance.kind !== 'ai_estimate' || !text(provenance.model, 160)
       || !text(provenance.generatedAt, 80) || !Number.isFinite(Date.parse(provenance.generatedAt)) || typeof provenance.cached !== 'boolean') throw new Error();
+    if (provenance.expiresAt !== undefined && (!text(provenance.expiresAt, 80) || !Number.isFinite(Date.parse(provenance.expiresAt)))) throw new Error();
+    if (provenance.cacheVersion !== undefined && !text(provenance.cacheVersion, 160)) throw new Error();
     if (!Array.isArray(value.assumptions) || value.assumptions.length > 12 || value.assumptions.some((assumption) => !text(assumption))) throw new Error();
     const quotes = value.quotes as SupplierQuote[];
     // Recompute both decisions rather than trusting recommendations in the response.
@@ -65,22 +70,91 @@ export async function estimateStatus(): Promise<boolean> {
   } finally { clearTimeout(timer); }
 }
 
-export async function generateEstimates(
+type EstimateSuppliers = Array<{ id: string; name: string }>;
+type EstimateGenerator = (
   request: ProcurementRequest,
-  suppliers: Array<{ id: string; name: string }>,
+  suppliers: EstimateSuppliers,
   preference: PurchasingPreference,
   signal: AbortSignal,
+) => Promise<EstimateResponse>;
+
+const CACHE_VERSION = 'procurement-estimates-v3';
+const CACHE_TTL_MS = 10 * 60 * 1000;
+
+interface CachedOffer {
+  supplierId: string;
+  submittedAt: string;
+  notes?: string;
+  item: Omit<SupplierQuote['items'][number], 'requestedItemId'>;
+}
+
+interface CachedEstimates {
+  offers: CachedOffer[];
+  provenance: EstimateProvenance;
+  assumptions: string[];
+  expiresAt: number;
+}
+
+interface PendingEstimates {
+  controller: AbortController;
+  promise: Promise<CachedEstimates>;
+  subscribers: number;
+}
+
+function normalize(value: string): string { return value.trim().replace(/\s+/g, ' ').toLowerCase(); }
+
+function cacheKey(request: ProcurementRequest, suppliers: EstimateSuppliers, timestamp: number): string {
+  validateComparisonInput(request, []);
+  const selected = new Set(request.selectedSupplierIds);
+  if (suppliers.length !== selected.size || new Set(suppliers.map((supplier) => supplier.id)).size !== selected.size
+    || suppliers.some((supplier) => !selected.has(supplier.id) || !supplier.name.trim())) {
+    throw new EstimateError('Select valid suppliers before generating estimates.', 'invalid_request');
+  }
+  const item = request.items[0];
+  // Budget, deadline, preference and request IDs affect comparisons, not the generated offers.
+  return JSON.stringify([
+    CACHE_VERSION, new Date(timestamp).toISOString().slice(0, 10), normalize(item.name), normalize(item.unitLabel ?? 'units'), item.quantity,
+    suppliers.map((supplier) => [supplier.id, normalize(supplier.name)]).sort((a, b) => a[0].localeCompare(b[0])),
+  ]);
+}
+
+function snapshotEstimates(response: EstimateResponse, receivedAt: number, ttlMs: number): CachedEstimates {
+  const generatedAt = Date.parse(response.provenance.generatedAt);
+  return {
+    offers: response.quotes.map((quote) => ({
+      supplierId: quote.supplierId, submittedAt: quote.submittedAt, ...(quote.notes === undefined ? {} : { notes: quote.notes }),
+      item: { availableQuantity: quote.items[0].availableQuantity, expectedDate: quote.items[0].expectedDate, price: { ...quote.items[0].price } },
+    })),
+    provenance: structuredClone(response.provenance), assumptions: [...response.assumptions],
+    // A server cache hit must retain its original expiry; browser hits never extend it.
+    expiresAt: Math.min(generatedAt + ttlMs, receivedAt + ttlMs, response.provenance.expiresAt ? Date.parse(response.provenance.expiresAt) : Infinity),
+  };
+}
+
+function responseForRequest(estimates: CachedEstimates, request: ProcurementRequest, cached: boolean): EstimateResponse {
+  const quotes: SupplierQuote[] = estimates.offers.map((offer, index) => ({
+    id: `estimate-${request.id.slice(0, 140)}-${index + 1}`, requestId: request.id, supplierId: offer.supplierId, submittedAt: offer.submittedAt,
+    ...(offer.notes === undefined ? {} : { notes: offer.notes }),
+    items: [{ ...offer.item, price: { ...offer.item.price }, requestedItemId: request.items[0].id }],
+  }));
+  return validateEstimateResponse({
+    quotes, provenance: { ...structuredClone(estimates.provenance), cached: cached || estimates.provenance.cached }, assumptions: [...estimates.assumptions],
+  }, request);
+}
+
+async function fetchEstimates(
+  fetcher: typeof fetch,
+  request: ProcurementRequest,
+  suppliers: EstimateSuppliers,
+  preference: PurchasingPreference,
+  controller: AbortController,
 ): Promise<EstimateResponse> {
-  const controller = new AbortController();
-  const cancel = () => controller.abort(signal.reason);
-  signal.addEventListener('abort', cancel, { once: true });
-  if (signal.aborted) cancel();
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, 65000);
   try {
-    const response = await fetch('/api/procurement/estimates', {
+    const response = await fetcher('/api/procurement/estimates', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ request, suppliers, preference }), signal: controller.signal,
+      body: JSON.stringify({ request, suppliers, preference }), signal: controller.signal, cache: 'no-store',
     });
     let value: unknown;
     try { value = await response.json(); }
@@ -93,10 +167,99 @@ export async function generateEstimates(
     return validateEstimateResponse(value, request);
   } catch (error) {
     if (timedOut) throw new EstimateError('The estimates took too long. Please try again.', 'request_timeout');
-    if (signal.aborted || error instanceof EstimateError) throw error;
+    if (controller.signal.aborted || error instanceof EstimateError) throw error;
     throw new EstimateError('We could not reach the estimate service. Please try again.', 'connection_failed');
   } finally {
     clearTimeout(timer);
-    signal.removeEventListener('abort', cancel);
   }
 }
+
+/** A page-memory cache: no estimates or buyer inputs are persisted in browser storage. */
+export function createEstimateClient(options: {
+  fetcher?: typeof fetch;
+  now?: () => number;
+  maxEntries?: number;
+  ttlMs?: number;
+} = {}): { generateEstimates: EstimateGenerator } {
+  const fetcher: typeof fetch = options.fetcher ?? ((...args) => fetch(...args));
+  const now = options.now ?? Date.now;
+  const maxEntries = options.maxEntries ?? 20;
+  const ttlMs = options.ttlMs ?? CACHE_TTL_MS;
+  if (!Number.isSafeInteger(maxEntries) || maxEntries < 1 || !Number.isFinite(ttlMs) || ttlMs <= 0 || ttlMs > CACHE_TTL_MS) {
+    throw new Error('Invalid estimate cache settings.');
+  }
+  const completed = new Map<string, CachedEstimates>();
+  const pending = new Map<string, PendingEstimates>();
+
+  function subscribe(entry: PendingEstimates, request: ProcurementRequest, signal: AbortSignal, joined: boolean): Promise<EstimateResponse> {
+    entry.subscribers += 1;
+    return new Promise((resolve, reject) => {
+      let active = true;
+      const release = () => {
+        active = false;
+        signal.removeEventListener('abort', cancel);
+        entry.subscribers -= 1;
+      };
+      const cancel = () => {
+        if (!active) return;
+        release();
+        reject(signal.reason ?? new DOMException('Aborted', 'AbortError'));
+        if (entry.subscribers === 0) entry.controller.abort(signal.reason);
+      };
+      signal.addEventListener('abort', cancel, { once: true });
+      if (signal.aborted) { cancel(); return; }
+      entry.promise.then((estimates) => {
+        if (!active) return;
+        release();
+        try { resolve(responseForRequest(estimates, request, joined)); }
+        catch (error) { reject(error); }
+      }, (error) => {
+        if (!active) return;
+        release();
+        reject(error);
+      });
+    });
+  }
+
+  const generate: EstimateGenerator = async (request, suppliers, preference, signal) => {
+    if (signal.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError');
+    const capturedRequest = structuredClone(request);
+    const capturedSuppliers = structuredClone(suppliers);
+    const requestedAt = now();
+    const key = cacheKey(capturedRequest, capturedSuppliers, requestedAt);
+    for (const [entryKey, entry] of completed) if (entry.expiresAt <= requestedAt) completed.delete(entryKey);
+    const existing = completed.get(key);
+    if (existing) {
+      completed.delete(key);
+      completed.set(key, existing);
+      return responseForRequest(existing, capturedRequest, true);
+    }
+    const active = pending.get(key);
+    if (active && !active.controller.signal.aborted) return subscribe(active, capturedRequest, signal, true);
+
+    const controller = new AbortController();
+    const entry: PendingEstimates = { controller, subscribers: 0, promise: undefined as unknown as Promise<CachedEstimates> };
+    entry.promise = fetchEstimates(fetcher, capturedRequest, capturedSuppliers, preference, controller).then((response) => {
+      const receivedAt = now();
+      const estimates = snapshotEstimates(response, receivedAt, ttlMs);
+      const generatedDay = new Date(response.provenance.generatedAt).toISOString().slice(0, 10);
+      const currentDay = new Date(receivedAt).toISOString().slice(0, 10);
+      if (!controller.signal.aborted && estimates.expiresAt > receivedAt && generatedDay === currentDay
+        && (response.provenance.cacheVersion === undefined || response.provenance.cacheVersion === CACHE_VERSION)
+        && key === cacheKey(capturedRequest, capturedSuppliers, receivedAt)) {
+        completed.delete(key);
+        completed.set(key, estimates);
+        while (completed.size > maxEntries) completed.delete(completed.keys().next().value!);
+      }
+      return estimates;
+    }).finally(() => { if (pending.get(key) === entry) pending.delete(key); });
+    // Cancellation can detach all subscribers before fetch settles. Always handle its rejection.
+    void entry.promise.catch(() => {});
+    pending.set(key, entry);
+    return subscribe(entry, capturedRequest, signal, false);
+  };
+  return { generateEstimates: generate };
+}
+
+const defaultClient = createEstimateClient();
+export const generateEstimates = defaultClient.generateEstimates;

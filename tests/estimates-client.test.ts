@@ -1,9 +1,11 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockQuotes, requestFromDraft, sampleDraft } from '../src/data';
-import { estimateStatus, generateEstimates, validateEstimateResponse } from '../src/estimates-client';
+import { createEstimateClient, estimateStatus, validateEstimateResponse } from '../src/estimates-client';
+import type { ProcurementRequest } from '../src/domain/model';
 
 const request = requestFromDraft(sampleDraft());
 const selectedSuppliers = request.selectedSupplierIds.map((id) => ({ id, name: id }));
+const generatedAt = Date.parse('2026-10-03T12:00:00Z');
 
 function payload() {
   return {
@@ -53,6 +55,8 @@ describe('estimate response boundary', () => {
 });
 
 describe('local estimate API client', () => {
+  let generateEstimates: ReturnType<typeof createEstimateClient>['generateEstimates'];
+  beforeEach(() => { generateEstimates = createEstimateClient({ now: () => generatedAt }).generateEstimates; });
   it('sends one batch to our server without credentials', async () => {
     const fetchMock = vi.fn(async (_url: string) => new Response(JSON.stringify(payload()), { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
@@ -104,5 +108,236 @@ describe('local estimate API client', () => {
     expect(await estimateStatus()).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/procurement/status');
+  });
+});
+
+describe('browser estimate cache', () => {
+  function setup(options: { ttlMs?: number; maxEntries?: number } = {}) {
+    let timestamp = generatedAt;
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, init?: RequestInit) => {
+      const sent = JSON.parse(String(init?.body)) as { request: ProcurementRequest };
+      const value = payload();
+      value.provenance.generatedAt = new Date(timestamp).toISOString();
+      value.quotes = value.quotes.filter((quote) => sent.request.selectedSupplierIds.includes(quote.supplierId)).map((quote) => ({
+        ...quote, requestId: sent.request.id, items: quote.items.map((item) => ({ ...item, requestedItemId: sent.request.items[0].id })),
+      }));
+      return new Response(JSON.stringify(value));
+    });
+    const client = createEstimateClient({ fetcher: fetchMock, now: () => timestamp, ...options });
+    const generate = (input = request, suppliers = selectedSuppliers, preference: 'lowest_cost' | 'earliest_delivery' = 'lowest_cost', signal = new AbortController().signal) =>
+      client.generateEstimates(input, suppliers, preference, signal);
+    return { fetchMock, generate, advance: (milliseconds: number) => { timestamp += milliseconds; }, setTime: (value: number) => { timestamp = value; } };
+  }
+
+  it('reuses one generation for cheapest and fastest, and recomputes changed budget/deadline against the same offers', async () => {
+    const { generate, fetchMock } = setup();
+    const first = await generate();
+    const fast = await generate(request, selectedSuppliers, 'earliest_delivery');
+    const stricter = { ...request, id: 'new-request', maxBudgetCents: 1, items: [{ ...request.items[0], id: 'new-item', requiredDate: '2026-10-04' }] };
+    const changed = await generate(stricter);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(first.provenance.cached).toBe(false);
+    expect(fast.provenance.cached).toBe(true);
+    expect(fast.comparisons.earliest_delivery.recommendedSupplierIds).toEqual(['comfort']);
+    expect(changed.comparisons.lowest_cost.outcome).toBe('no_feasible_quote');
+    expect(changed.comparisons.earliest_delivery.outcome).toBe('no_feasible_quote');
+    expect(changed.quotes.every((quote) => quote.requestId === 'new-request' && quote.items[0].requestedItemId === 'new-item')).toBe(true);
+    expect(changed.quotes.map((quote) => quote.id)).not.toEqual(first.quotes.map((quote) => quote.id));
+    expect(changed.comparisons.lowest_cost.evaluations.every((evaluation) => evaluation.rejections.some((rejection) => rejection.code === 'budget'))).toBe(true);
+  });
+
+  it('canonicalizes item/unit whitespace and casing, supplier names, and supplier order', async () => {
+    const { generate, fetchMock } = setup();
+    await generate();
+    const equivalent = {
+      ...request, selectedSupplierIds: [...request.selectedSupplierIds].reverse(),
+      items: [{ ...request.items[0], name: `  ${request.items[0].name.toUpperCase().replace(/ /g, '   ')}  `, unitLabel: ` ${request.items[0].unitLabel?.toUpperCase()} ` }],
+    };
+    const result = await generate(equivalent, selectedSuppliers.map((supplier) => ({ ...supplier, name: ` ${supplier.name.toUpperCase()} ` })).reverse());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.provenance.cached).toBe(true);
+  });
+
+  it.each(['item', 'unit', 'quantity', 'supplier name', 'supplier set'])('generates again when %s changes', async (change) => {
+    const { generate, fetchMock } = setup();
+    await generate();
+    const next = structuredClone(request);
+    let suppliers = structuredClone(selectedSuppliers);
+    if (change === 'item') next.items[0].name = 'Office tables';
+    if (change === 'unit') next.items[0].unitLabel = 'sets';
+    if (change === 'quantity') next.items[0].quantity += 1;
+    if (change === 'supplier name') suppliers[0].name = 'Different company';
+    if (change === 'supplier set') { next.selectedSupplierIds.pop(); suppliers = suppliers.slice(0, -1); }
+    await generate(next, suppliers);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not allow returned objects to mutate cached offers or provenance', async () => {
+    const { generate, fetchMock } = setup();
+    const first = await generate();
+    first.quotes[0].items[0].price.cents = 1;
+    first.assumptions[0] = 'Changed by consumer';
+    first.provenance.model = 'Changed by consumer';
+    const second = await generate();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(second.quotes[0].items[0].price.cents).toBe(450000);
+    expect(second.assumptions[0]).not.toBe('Changed by consumer');
+    expect(second.provenance.model).toBe('example/model');
+  });
+
+  it('expires ten minutes after generation without extending expiry on hits', async () => {
+    const { generate, fetchMock, advance } = setup();
+    await generate();
+    advance(9 * 60 * 1000);
+    await generate();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    advance(60 * 1000);
+    await generate();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('honors the earlier server expiry and does not restart TTL when receiving cached server data', async () => {
+    let timestamp = generatedAt;
+    const fetcher = vi.fn(async () => {
+      const value = { ...payload(), provenance: { ...payload().provenance, cached: true, expiresAt: '2026-10-03T12:01:00Z', cacheVersion: 'procurement-estimates-v3' } };
+      return new Response(JSON.stringify(value));
+    });
+    const client = createEstimateClient({ fetcher, now: () => timestamp });
+    await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
+    timestamp += 60 * 1000;
+    await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('never caches already expired responses or responses for another prompt version', async () => {
+    for (const provenance of [
+      { ...payload().provenance, generatedAt: '2026-10-03T11:49:00Z' },
+      { ...payload().provenance, cacheVersion: 'outdated-prompt' },
+    ]) {
+      const fetcher = vi.fn(async () => new Response(JSON.stringify({ ...payload(), provenance })));
+      const client = createEstimateClient({ fetcher, now: () => generatedAt });
+      await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
+      await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
+      expect(fetcher).toHaveBeenCalledTimes(2);
+    }
+  });
+
+  it('invalidates on the next UTC day even while within TTL', async () => {
+    const { generate, fetchMock, setTime, advance } = setup();
+    setTime(Date.parse('2026-10-03T23:59:00Z'));
+    await generate();
+    advance(2 * 60 * 1000);
+    await generate();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('evicts least recently used entries when the cache is full', async () => {
+    const { generate, fetchMock } = setup({ maxEntries: 2 });
+    const another = { ...request, items: [{ ...request.items[0], name: 'Tables' }] };
+    const third = { ...request, items: [{ ...request.items[0], name: 'Stools' }] };
+    await generate();
+    await generate(another);
+    await generate();
+    await generate(third);
+    await generate();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    await generate(another);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('keeps cache isolated to each client/page instance', async () => {
+    const first = setup();
+    const second = setup();
+    await first.generate();
+    await second.generate();
+    expect(first.fetchMock).toHaveBeenCalledTimes(1);
+    expect(second.fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['service error', 'invalid output'])('does not cache %s', async (failure) => {
+    const fetcher = vi.fn(async () => {
+      if (fetcher.mock.calls.length === 1) {
+        if (failure === 'service error') return new Response(JSON.stringify({ error: 'Try again', code: 'request_failed' }), { status: 503 });
+        const invalid = payload();
+        invalid.quotes.pop();
+        return new Response(JSON.stringify(invalid));
+      }
+      return new Response(JSON.stringify(payload()));
+    });
+    const client = createEstimateClient({ fetcher, now: () => generatedAt });
+    await expect(client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal)).rejects.toBeDefined();
+    await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('shared pending estimate requests', () => {
+  function setup() {
+    let finish!: (response: Response) => void;
+    const networkSignals: AbortSignal[] = [];
+    const fetcher = vi.fn((_url: RequestInfo | URL, options?: RequestInit) => new Promise<Response>((resolve, reject) => {
+      finish = resolve;
+      const signal = options?.signal as AbortSignal;
+      networkSignals.push(signal);
+      signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), { once: true });
+    }));
+    const client = createEstimateClient({ fetcher, now: () => generatedAt });
+    const generate = (signal = new AbortController().signal, preference: 'lowest_cost' | 'earliest_delivery' = 'lowest_cost') =>
+      client.generateEstimates(request, selectedSuppliers, preference, signal);
+    return { generate, fetcher, networkSignals, finish: () => finish(new Response(JSON.stringify(payload()))) };
+  }
+
+  it('deduplicates simultaneous submissions including different preferences', async () => {
+    const { generate, fetcher, finish } = setup();
+    const first = generate();
+    const second = generate(new AbortController().signal, 'earliest_delivery');
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    finish();
+    const results = await Promise.all([first, second]);
+    expect(results[0].comparisons.lowest_cost.recommendedSupplierIds).toEqual(['metro']);
+    expect(results[1].comparisons.earliest_delivery.recommendedSupplierIds).toEqual(['comfort']);
+    await generate();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('cancels one caller without cancelling another caller sharing its network request', async () => {
+    const { generate, fetcher, networkSignals, finish } = setup();
+    const controller = new AbortController();
+    const first = generate(controller.signal);
+    const second = generate();
+    controller.abort();
+    await expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    expect(networkSignals[0].aborted).toBe(false);
+    finish();
+    await expect(second).resolves.toMatchObject({ provenance: { kind: 'ai_estimate' } });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('aborts the network only after all callers cancel and permits a fresh retry', async () => {
+    const { generate, fetcher, networkSignals, finish } = setup();
+    const firstController = new AbortController();
+    const secondController = new AbortController();
+    const first = generate(firstController.signal);
+    const second = generate(secondController.signal);
+    const firstAssertion = expect(first).rejects.toMatchObject({ name: 'AbortError' });
+    const secondAssertion = expect(second).rejects.toMatchObject({ name: 'AbortError' });
+    firstController.abort();
+    expect(networkSignals[0].aborted).toBe(false);
+    secondController.abort();
+    expect(networkSignals[0].aborted).toBe(true);
+    const retry = generate();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    finish();
+    await Promise.all([firstAssertion, secondAssertion, retry]);
+    await generate();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('never sends a request for an already cancelled caller', async () => {
+    const { generate, fetcher } = setup();
+    const controller = new AbortController();
+    controller.abort();
+    await expect(generate(controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

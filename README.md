@@ -132,14 +132,28 @@ Open the main application at `/`, select **AI estimates**, and click **Generate 
 ### Request and comparison behavior
 
 - The browser sends item, quantity, deadline, optional budget, and 3–5 selected supplier identities to `/api/procurement/estimates`.
-- The server combines a fixed base prompt with input JSON and requests schema-constrained output from Baseten. It validates supplier coverage, integer prices and quantities, real dates, and clarification responses before passing data to the application.
+- On a cache miss, the server combines a fixed base prompt with the item, unit, quantity, selected suppliers, and current UTC date, and requests schema-constrained output from Baseten. Budget and deadline stay in the application for feasibility checks; they do not influence generated offers. The server validates supplier coverage, integer prices and quantities, real dates, and clarification responses before passing data to the application.
 - Default order is **DeepSeek V4.1 Flash → GLM 5.3 Flash → GLM 5.3 Fast**, based on the small live evaluation below. `BASETEN_MODEL_ORDER` can change it. DeepSeek uses `reasoning_effort: none`; both GLM models use `low`. Missing keys are skipped. Transient failures and invalid outputs may use a fallback; authentication, billing, and configuration errors stop the request.
-- Each attempt has an 18-second limit and the whole fallback sequence has a 45-second budget. Rate-limit pauses are respected. Accepted estimates are cached for ten minutes within the local server session; product, quantity, supplier set, server date, or configuration changes invalidate the relevant cache.
-- Cancelling or editing a pending request aborts the local server's model call and prevents further fallback attempts. Stale responses do not replace the edited request.
+- Each attempt has an 18-second limit and the whole fallback sequence has a 45-second budget. Rate-limit pauses are respected.
+- Cancelling or editing a pending request detaches that caller. If it was the last caller waiting for those estimates, the network/model call is aborted and further fallback attempts stop. Other callers sharing the same generation can still receive their result. Stale responses do not replace the edited request.
 - Changing the preference, budget, or deadline reuses the same cached facts and recomputes the decision. A valid result with no feasible supplier is retained. The model can request clarification for ambiguous goods.
 - The model supplies estimated facts and assumptions. Both the server and frontend compute the cheapest and earliest feasible options with the same comparison rules. No model-selected winner is trusted.
 
 The inputs do not include a delivery address or detailed product specification. Standard-quality comparable goods, domestic US delivery, USD, and totals including assumed charges are stated demo assumptions. Model estimates cannot establish real supplier price accuracy or availability.
+
+### Cache behavior
+
+The application checks **browser memory → server memory → Baseten**, in that order. A fresh browser hit needs no HTTP request; a fresh server hit needs no model call. Successful, validated offers are stored after generation and reused for ten minutes from completion. Reading an entry never extends its expiry, and a browser entry cannot outlive the server's original expiry.
+
+- **Cheapest/fastest switches:** comparisons run locally, with no HTTP or model call.
+- **Budget/deadline changes:** reuse the same offers and recompute both comparisons. Request and item IDs are remapped to the current submission.
+- **Changed goods, unit, quantity, or suppliers:** use a different cache key. Whitespace, casing, and supplier order are normalized. Keys also include the UTC date and prompt version.
+- **Repeated concurrent submissions:** share one pending request in the browser and one generation on the server. Pending work is separate from saved entries, so cache eviction cannot duplicate an active call.
+- **Bounds:** up to 20 browser entries and 100 server entries, evicting the least recently used. The server allows at most two new generations at once; cache hits and callers joining pending work remain available.
+- **Failures:** failed, invalid, or cancelled generations are not saved. A valid offer set with no feasible winner is reusable. Valid clarification responses are retained in the server cache.
+- **Lifetime:** refreshing the page clears browser memory; restarting the server clears server memory. Server key/model-order changes clear its cache and cancel old pending work. Nothing is persisted to browser storage.
+
+For this single-process demo, bounded memory caches avoid another service and connection setup. **Redis is the next step when multiple backend instances need a shared cache, or cached results should survive application-server restarts.** That follows Redis's documented [cache-aside pattern](https://redis.io/docs/latest/develop/use-cases/cache-aside/). Redis would add a service, credentials, connection handling, and distributed locking for concurrent misses. It is not configured in this version.
 
 ### Optional live evaluation
 
@@ -169,7 +183,7 @@ These API endpoints run with `npm run dev` and `npm run preview`. Deploying `dis
 - [README.md](README.md): project overview and current status.
 - [LogisticsNerd_Procurement_Brief.md](LogisticsNerd_Procurement_Brief.md): the detailed requirements and original illustrative scenario.
 - [src/main.ts](src/main.ts): the three-step interface and session flow.
-- [src/estimates-client.ts](src/estimates-client.ts): local API calls, cancellation, response validation, and recomputed comparisons.
+- [src/estimates-client.ts](src/estimates-client.ts): browser memory caching, shared pending requests, cancellation, response validation, and recomputed comparisons.
 - [server/procurement.mjs](server/procurement.mjs): the base prompt, output schema, semantic validation, Baseten calls, fallback limits, and caching.
 - [server/procurement-middleware.mjs](server/procurement-middleware.mjs): local status and estimate endpoints.
 - [scripts/probe-estimates.mjs](scripts/probe-estimates.mjs): optional live model evaluation and ignored reports.
@@ -187,7 +201,7 @@ These API endpoints run with `npm run dev` and `npm run preview`. Deploying `dis
 - [server/shipping.mjs](server/shipping.mjs): server-only shipping adapters, input checks, normalization, and request caching.
 - [tests/shipping.test.mjs](tests/shipping.test.mjs): simulated provider contracts and failure handling; no live requests in the automated suite.
 
-Verification includes **157 automated checks**, TypeScript checking, a production build, and browser walkthroughs of the original sample scenarios, preference switching, retained form edits, changed deadlines and budgets, unsupported quantities, supplier selection, keyboard controls, and mobile layouts. AI browser checks also cover generated chair estimates, a custom request for boxes of pens, different cheapest/fastest winners, cached budget changes with no feasible result, clarification for ambiguous goods, and the preserved original sample winner. AI mode's live model comparison is tracked separately above. Simulated API tests validate integration behavior; they do not establish provider reliability or prediction accuracy.
+Verification includes **186 automated checks**, TypeScript checking, a production build, and browser walkthroughs of the original sample scenarios, preference switching, retained form edits, changed deadlines and budgets, unsupported quantities, supplier selection, keyboard controls, and mobile layouts. AI browser checks also cover generated chair estimates, a custom request for boxes of pens, different cheapest/fastest winners, cached budget changes with no feasible result, clarification for ambiguous goods, and the preserved original sample winner. Cache regressions cover zero extra calls for unchanged configurations, expiry, eviction, concurrent deduplication, independent caller cancellation, configuration changes, and retry pauses. AI mode's live model comparison is tracked separately above. Simulated API tests validate integration behavior; they do not establish provider reliability or prediction accuracy.
 
 ## Shipping API comparison experiment
 
