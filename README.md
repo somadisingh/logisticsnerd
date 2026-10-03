@@ -123,11 +123,32 @@ BASETEN_DEEPSEEK_API_KEY=
 BASETEN_GLM_FLASH_API_KEY=
 BASETEN_GLM_FAST_API_KEY=
 BASETEN_MODEL_ORDER=deepseek,glm_flash,glm_fast
+REDIS_URL=
 ```
 
 The same Baseten account API key can be used in all three key fields. Configured models must be available to that account with sufficient credit. `.env.local` is gitignored; never use `VITE_` prefixes for secrets. The server rereads configuration for requests, so adding a key does not require rebuilding.
 
-Open the main application at `/`, select **AI estimates**, and click **Generate supplier estimates**. The UI's connection check confirms local key configuration, not a successful paid provider call. Use **Check connection** after configuring a previously missing key. Sample mode makes no model requests.
+AI mode requires the Baseten keys and a Redis connection URL. Open the main application at `/`, select **AI estimates**, and click **Generate supplier estimates**. The UI's connection check confirms local model/cache configuration, not successful provider authentication or Redis connectivity. Use **Check connection** after completing configuration. Sample mode makes no model requests.
+
+### Persistent Redis setup
+
+**Managed Redis:** create an account-owned Redis database, then copy its TCP connection URL into the `REDIS_URL` placeholder in `.env.local`. For Upstash, use the TLS **Redis/TCP** connection option, which starts with `rediss://`; the HTTPS REST URL/token is a different interface. Keep the URL server-only because it includes a password. Upstash documents [persistent storage](https://upstash.com/docs/redis/features/durability/) across service restarts. Choose a database region near the app server, use its primary endpoint, and keep key eviction disabled when retaining entries matters.
+
+```env
+REDIS_URL=rediss://default:YOUR_PASSWORD@YOUR_REDIS_HOST:YOUR_PORT
+```
+
+**Local Docker alternative:** with Docker running, start the included Redis service and set its local URL:
+
+```sh
+docker compose up -d redis
+```
+
+```env
+REDIS_URL=redis://127.0.0.1:6379/0
+```
+
+[compose.yaml](compose.yaml) stores data in a named volume, enables append-only persistence with a write flush every second, and binds the port to loopback. Closing the browser or stopping the Vite server leaves Redis and its data independent. Stopping/recreating the container retains the volume; deleting that volume removes its data. Local Redis must be running to serve cache misses. A sudden machine failure can lose approximately the most recent second of writes under this policy; see [Redis persistence](https://redis.io/docs/latest/management/persistence/).
 
 ### Request and comparison behavior
 
@@ -143,17 +164,29 @@ The inputs do not include a delivery address or detailed product specification. 
 
 ### Cache behavior
 
-The application checks **browser memory → server memory → Baseten**, in that order. A fresh browser hit needs no HTTP request; a fresh server hit needs no model call. Successful, validated offers are stored after generation and reused for ten minutes from completion. Reading an entry never extends its expiry, and a browser entry cannot outlive the server's original expiry.
+The application checks **browser memory → server memory → Redis → Baseten**, in that order. A fresh browser hit needs no HTTP request; a fresh server or Redis hit needs no model call. Successful, validated offers are saved in Redis before the server returns them, with a **seven-day expiry from generation completion**. Reading an entry never extends its expiry, and memory entries cannot outlive the original expiry. Redis entries retain the original generation and as-of dates.
 
 - **Cheapest/fastest switches:** comparisons run locally, with no HTTP or model call.
 - **Budget/deadline changes:** reuse the same offers and recompute both comparisons. Request and item IDs are remapped to the current submission.
-- **Changed goods, unit, quantity, or suppliers:** use a different cache key. Whitespace, casing, and supplier order are normalized. Keys also include the UTC date and prompt version.
-- **Repeated concurrent submissions:** share one pending request in the browser and one generation on the server. Pending work is separate from saved entries, so cache eviction cannot duplicate an active call.
+- **Changed goods, unit, quantity, or suppliers:** use a different cache key. Whitespace, casing, and supplier order are normalized. Keys include the prompt/model configuration version and a private credential fingerprint, with no daily date component. Redis key names are hashed rather than exposing buyer inputs or credentials.
+- **Delivery freshness:** if any saved delivery date has passed, refresh the whole offer set even within seven days. Dates and feasibility are rechecked before reuse; offers with a past date are never presented as a current delivery estimate. The seven-day period is a maximum cache age.
+- **Repeated concurrent submissions:** share one pending request in the browser and one generation on the server. Different server instances coordinate through a Redis lock with a 90-second lease. Waiting callers read the saved result within a bounded wait; publishing the result and releasing the lock happen atomically only for its owner. Pending work is separate from saved entries.
 - **Bounds:** up to 20 browser entries and 100 server entries, evicting the least recently used. The server allows at most two new generations at once; cache hits and callers joining pending work remain available.
-- **Failures:** failed, invalid, or cancelled generations are not saved. A valid offer set with no feasible winner is reusable. Valid clarification responses are retained in the server cache.
-- **Lifetime:** refreshing the page clears browser memory; restarting the server clears server memory. Server key/model-order changes clear its cache and cancel old pending work. Nothing is persisted to browser storage.
+- **Failures:** failed or invalid model generations are not saved. A valid offer set with no feasible winner is reusable. Valid clarification responses are saved in Redis too. Cancelled callers cannot initiate fallback work; an already committed Redis write remains valid. Redis errors stop a cache miss instead of silently making an uncoordinated paid model call. Connections and commands have bounded timeouts, with no offline command replay.
+- **Lifetime:** refreshing the page clears browser memory; restarting the app server clears server memory. Redis still serves the next submission. Server key/model-order changes select a new cache namespace and cancel old pending work; old Redis entries expire naturally. Nothing is persisted to browser storage.
 
-For this single-process demo, bounded memory caches avoid another service and connection setup. **Redis is the next step when multiple backend instances need a shared cache, or cached results should survive application-server restarts.** That follows Redis's documented [cache-aside pattern](https://redis.io/docs/latest/develop/use-cases/cache-aside/). Redis would add a service, credentials, connection handling, and distributed locking for concurrent misses. It is not configured in this version.
+Redis is required by the application's AI middleware. The optional live model evaluation CLI bypasses Redis intentionally to measure inference. The cache flow follows Redis's [cache-aside pattern](https://redis.io/docs/latest/develop/use-cases/cache-aside/); the lock follows its documented [token-checked locking approach](https://redis.io/docs/latest/develop/clients/patterns/distributed-locks/).
+
+### Verify Redis without model charges
+
+```sh
+npm run test:redis -- --configured  # Test REDIS_URL from .env.local
+npm run test:redis                 # Test local Redis on port 6379
+```
+
+This probe uses simulated model responses and uniquely scoped verification keys, then removes only its own keys. It checks real Redis connections, shared generation across app instances, reuse after recreating the app/connection, one-week TTL, retained original expiry, and safe lock ownership. It does not contact Baseten. Reports are saved to the gitignored `.local-planning/api-research/redis-tests/` folder.
+
+For a disposable Redis with a restart persistence check, provide an existing binary: `npm run test:redis -- --server-bin /absolute/path/to/redis-server`. A verification run against Redis 8.10.2 passed with AOF persistence, one fixture generation, and zero real model calls; actual Redis and app-instance restarts retained the record.
 
 ### Optional live evaluation
 
@@ -186,8 +219,12 @@ These API endpoints run with `npm run dev` and `npm run preview`. Deploying `dis
 - [src/estimates-client.ts](src/estimates-client.ts): browser memory caching, shared pending requests, cancellation, response validation, and recomputed comparisons.
 - [server/procurement.mjs](server/procurement.mjs): the base prompt, output schema, semantic validation, Baseten calls, fallback limits, and caching.
 - [server/procurement-middleware.mjs](server/procurement-middleware.mjs): local status and estimate endpoints.
+- [server/redis-cache.mjs](server/redis-cache.mjs): server-only Redis connection, bounded commands, cache TTL, and ownership-checked locks.
+- [compose.yaml](compose.yaml): optional local Redis with a persistent named volume.
+- [scripts/verify-redis.mjs](scripts/verify-redis.mjs): optional real Redis verification with simulated model output and isolated test keys.
 - [scripts/probe-estimates.mjs](scripts/probe-estimates.mjs): optional live model evaluation and ignored reports.
 - [tests/procurement.test.mjs](tests/procurement.test.mjs): simulated estimate contracts, failures, fallback behavior, and cache checks.
+- [tests/redis-cache.test.mjs](tests/redis-cache.test.mjs): Redis adapter contracts, expiry, safe errors, and lock ownership.
 - [tests/estimates-client.test.ts](tests/estimates-client.test.ts): response validation, recomputed recommendations, cancellation, and error handling.
 - [.env.example](.env.example): credential placeholders without secret values.
 - [src/domain/compare.ts](src/domain/compare.ts): deterministic feasibility checks and ranking.
@@ -201,7 +238,7 @@ These API endpoints run with `npm run dev` and `npm run preview`. Deploying `dis
 - [server/shipping.mjs](server/shipping.mjs): server-only shipping adapters, input checks, normalization, and request caching.
 - [tests/shipping.test.mjs](tests/shipping.test.mjs): simulated provider contracts and failure handling; no live requests in the automated suite.
 
-Verification includes **186 automated checks**, TypeScript checking, a production build, and browser walkthroughs of the original sample scenarios, preference switching, retained form edits, changed deadlines and budgets, unsupported quantities, supplier selection, keyboard controls, and mobile layouts. AI browser checks also cover generated chair estimates, a custom request for boxes of pens, different cheapest/fastest winners, cached budget changes with no feasible result, clarification for ambiguous goods, and the preserved original sample winner. Cache regressions cover zero extra calls for unchanged configurations, expiry, eviction, concurrent deduplication, independent caller cancellation, configuration changes, and retry pauses. AI mode's live model comparison is tracked separately above. Simulated API tests validate integration behavior; they do not establish provider reliability or prediction accuracy.
+Verification includes **242 automated checks**, TypeScript checking, a production build, and browser walkthroughs of the original sample scenarios, preference switching, retained form edits, changed deadlines and budgets, unsupported quantities, supplier selection, keyboard controls, and mobile layouts. AI browser checks also cover generated chair estimates, a custom request for boxes of pens, different cheapest/fastest winners, cached budget changes with no feasible result, clarification for ambiguous goods, and the preserved original sample winner. Cache regressions cover zero extra calls for unchanged configurations, seven-day expiry, reuse after app-server restarts, date freshness, cross-instance generation sharing, independent caller cancellation, configuration changes, Redis outages, and lock ownership. AI mode's live model comparison is tracked separately above. Simulated API tests validate integration behavior; they do not establish provider reliability or prediction accuracy.
 
 ## Shipping API comparison experiment
 

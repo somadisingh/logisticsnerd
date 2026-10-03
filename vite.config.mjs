@@ -13,11 +13,15 @@ export default defineConfig(({ mode }) => {
       name: 'local-shipping-comparison',
       configureServer(server) {
         server.middlewares.use(shippingMiddleware(getEnv));
-        server.middlewares.use(procurementMiddleware(getEnv, { compareQuotes, validateComparisonInput }, suppliers));
+        const procurement = procurementMiddleware(getEnv, { compareQuotes, validateComparisonInput }, suppliers);
+        server.middlewares.use(procurement);
+        server.httpServer?.once('close', () => { void procurement.close(); });
       },
       configurePreviewServer(server) {
         server.middlewares.use(shippingMiddleware(getEnv));
-        server.middlewares.use(procurementMiddleware(getEnv, { compareQuotes, validateComparisonInput }, suppliers));
+        const procurement = procurementMiddleware(getEnv, { compareQuotes, validateComparisonInput }, suppliers);
+        server.middlewares.use(procurement);
+        server.httpServer?.once('close', () => { void procurement.close(); });
       },
     }],
     build: { rollupOptions: { input: { main: resolve(import.meta.dirname, 'index.html'), shipping: resolve(import.meta.dirname, 'shipping-lab.html') } } },

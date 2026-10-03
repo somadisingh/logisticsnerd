@@ -11,7 +11,7 @@ try {
     vite.ssrLoadModule('/src/data.ts'),
   ]);
   const env = loadEnv('development', process.cwd(), '');
-  const run = createEstimateRunner({ env, rules: { compareQuotes, validateComparisonInput }, catalog: data.suppliers });
+  const run = createEstimateRunner({ env, rules: { compareQuotes, validateComparisonInput }, catalog: data.suppliers, maxConcurrentGenerations: MODEL_CONFIGS.length });
   const quick = process.argv.includes('--quick');
   const cases = [
     ...data.scenarios.map((scenario) => ({ id: scenario.id, draft: data.sampleDraft(scenario.id), expectation: 'estimated' })),

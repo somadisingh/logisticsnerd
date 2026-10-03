@@ -52,6 +52,14 @@ describe('estimate response boundary', () => {
     expect(() => validateEstimateResponse(null, request)).toThrow('did not pass our checks');
     expect(() => validateEstimateResponse({ quotes: [null] }, request)).toThrow('did not pass our checks');
   });
+
+  it('accepts an older valid as-of date and rejects invalid calendar provenance', () => {
+    const valid = { ...payload(), provenance: { ...payload().provenance, asOfDate: '2026-10-02' } };
+    expect(validateEstimateResponse(valid, request).provenance.asOfDate).toBe('2026-10-02');
+    for (const asOfDate of ['2026-02-30', 'October 3', 123]) {
+      expect(() => validateEstimateResponse({ ...valid, provenance: { ...valid.provenance, asOfDate } }, request)).toThrow('did not pass our checks');
+    }
+  });
 });
 
 describe('local estimate API client', () => {
@@ -185,13 +193,13 @@ describe('browser estimate cache', () => {
     expect(second.provenance.model).toBe('example/model');
   });
 
-  it('expires ten minutes after generation without extending expiry on hits', async () => {
+  it('expires one week after generation without extending expiry on hits', async () => {
     const { generate, fetchMock, advance } = setup();
     await generate();
-    advance(9 * 60 * 1000);
+    advance((7 * 24 - 1) * 60 * 60 * 1000);
     await generate();
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    advance(60 * 1000);
+    advance(60 * 60 * 1000);
     await generate();
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -199,7 +207,7 @@ describe('browser estimate cache', () => {
   it('honors the earlier server expiry and does not restart TTL when receiving cached server data', async () => {
     let timestamp = generatedAt;
     const fetcher = vi.fn(async () => {
-      const value = { ...payload(), provenance: { ...payload().provenance, cached: true, expiresAt: '2026-10-03T12:01:00Z', cacheVersion: 'procurement-estimates-v3' } };
+      const value = { ...payload(), provenance: { ...payload().provenance, cached: true, generatedAt: new Date(timestamp).toISOString(), expiresAt: new Date(timestamp + 60000).toISOString(), cacheVersion: 'procurement-estimates-v4' } };
       return new Response(JSON.stringify(value));
     });
     const client = createEstimateClient({ fetcher, now: () => timestamp });
@@ -209,26 +217,88 @@ describe('browser estimate cache', () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
-  it('never caches already expired responses or responses for another prompt version', async () => {
-    for (const provenance of [
-      { ...payload().provenance, generatedAt: '2026-10-03T11:49:00Z' },
-      { ...payload().provenance, cacheVersion: 'outdated-prompt' },
-    ]) {
-      const fetcher = vi.fn(async () => new Response(JSON.stringify({ ...payload(), provenance })));
-      const client = createEstimateClient({ fetcher, now: () => generatedAt });
-      await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
-      await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
-      expect(fetcher).toHaveBeenCalledTimes(2);
+  it('refetches when a cached entry expires while preparing its response', async () => {
+    const now = vi.fn().mockReturnValueOnce(generatedAt).mockReturnValueOnce(generatedAt).mockReturnValueOnce(generatedAt)
+      .mockReturnValueOnce(generatedAt + 99).mockReturnValue(generatedAt + 100);
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({
+      ...payload(), provenance: { ...payload().provenance, generatedAt: new Date(fetcher.mock.calls.length === 1 ? generatedAt : generatedAt + 100).toISOString() },
+    })));
+    const client = createEstimateClient({ fetcher, now, ttlMs: 100 });
+    await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
+    const refreshed = await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(refreshed.provenance.cached).toBe(false);
+    expect(refreshed.provenance.generatedAt).toBe(new Date(generatedAt + 100).toISOString());
+  });
+
+  it('rejects already expired responses without caching or automatically retrying', async () => {
+    const provenance = { ...payload().provenance, generatedAt: '2026-09-26T11:49:00Z' };
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ ...payload(), provenance })));
+    const client = createEstimateClient({ fetcher, now: () => generatedAt });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_response' });
+      expect(fetcher).toHaveBeenCalledTimes(attempt + 1);
     }
   });
 
-  it('invalidates on the next UTC day even while within TTL', async () => {
+  it('never caches responses for another prompt version', async () => {
+    const provenance = { ...payload().provenance, cacheVersion: 'outdated-prompt' };
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ ...payload(), provenance })));
+    const client = createEstimateClient({ fetcher, now: () => generatedAt });
+    await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
+    await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('reuses valid offers on the next UTC day while within the one-week TTL', async () => {
     const { generate, fetchMock, setTime, advance } = setup();
     setTime(Date.parse('2026-10-03T23:59:00Z'));
     await generate();
     advance(2 * 60 * 1000);
     await generate();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retains a previous-day Redis result with its original generated-at and as-of dates', async () => {
+    const provenance = { ...payload().provenance, cached: true, asOfDate: '2026-10-03', expiresAt: '2026-10-10T12:00:00Z', cacheVersion: 'procurement-estimates-v4' };
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ ...payload(), provenance })));
+    const client = createEstimateClient({ fetcher, now: () => generatedAt + 24 * 60 * 60 * 1000 });
+    await client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
+    const cached = await client.generateEstimates(request, selectedSuppliers, 'earliest_delivery', new AbortController().signal);
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(cached.provenance).toMatchObject({ cached: true, generatedAt: '2026-10-03T12:00:00Z', asOfDate: '2026-10-03' });
+  });
+
+  it('refetches the whole configuration once any cached delivery date is in the past', async () => {
+    let timestamp = generatedAt;
+    const fetcher = vi.fn(async () => {
+      const value = payload();
+      value.provenance.generatedAt = new Date(timestamp).toISOString();
+      value.quotes[0].items[0].expectedDate = fetcher.mock.calls.length === 1 ? '2026-10-03' : '2026-10-12';
+      return new Response(JSON.stringify(value));
+    });
+    const client = createEstimateClient({ fetcher, now: () => timestamp });
+    const generate = () => client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal);
+    await generate();
+    await generate();
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    timestamp += 24 * 60 * 60 * 1000;
+    const refreshed = await generate();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(refreshed.quotes[0].items[0].expectedDate).toBe('2026-10-12');
+    await generate();
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects a newly received response with past delivery dates without caching it', async () => {
+    const value = payload();
+    value.quotes[0].items[0].expectedDate = '2026-10-02';
+    const fetcher = vi.fn(async () => new Response(JSON.stringify(value)));
+    const client = createEstimateClient({ fetcher, now: () => generatedAt });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(client.generateEstimates(request, selectedSuppliers, 'lowest_cost', new AbortController().signal)).rejects.toMatchObject({ code: 'invalid_response' });
+      expect(fetcher).toHaveBeenCalledTimes(attempt + 1);
+    }
   });
 
   it('evicts least recently used entries when the cache is full', async () => {

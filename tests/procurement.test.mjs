@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { compareQuotes } from '../src/domain/compare.ts';
 import { validateComparisonInput } from '../src/domain/validate.ts';
+import { CacheError } from '../server/redis-cache.mjs';
 import {
   MODEL_CONFIGS,
   buildEstimateMessages,
@@ -42,6 +43,47 @@ function output() {
       { supplier_id: 'budget', available_quantity: 35, total_cents: 380000, expected_delivery_date: '2026-10-14' },
     ],
   };
+}
+
+function futureOutput() {
+  const value = output();
+  value.quotes.forEach((quote, index) => { quote.expected_delivery_date = `2026-10-${25 + index}`; });
+  return value;
+}
+
+function sharedRedis(now = () => Date.now()) {
+  const values = new Map();
+  const locks = new Map();
+  const current = (map, key) => {
+    const entry = map.get(key);
+    if (entry?.expiresAt <= now()) { map.delete(key); return null; }
+    return entry ?? null;
+  };
+  const store = {
+    values, locks,
+    configured: () => true,
+    get: vi.fn(async (key) => current(values, key)?.value ?? null),
+    put: vi.fn(async (key, value, ttlMs) => {
+      values.set(key, { value, expiresAt: now() + ttlMs });
+    }),
+    acquire: vi.fn(async (key, token, ttlMs) => {
+      if (current(locks, key)) return false;
+      locks.set(key, { token, expiresAt: now() + ttlMs });
+      return true;
+    }),
+    release: vi.fn(async (key, token) => {
+      if (current(locks, key)?.token !== token) return false;
+      locks.delete(key);
+      return true;
+    }),
+    complete: vi.fn(async (lockKey, token, dataKey, value, ttlMs) => {
+      if (current(locks, lockKey)?.token !== token) return false;
+      values.set(dataKey, { value, expiresAt: now() + ttlMs });
+      locks.delete(lockKey);
+      return true;
+    }),
+  };
+  return store;
 }
 
 function completion(value = output(), finishReason = 'stop') {
@@ -424,7 +466,7 @@ describe('Baseten estimate runner', () => {
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
-  it('invalidates cache for changed product facts and server dates', async () => {
+  it('invalidates changed product facts while reusing current offers across server dates', async () => {
     let now = new Date(`${AS_OF}T12:00:00Z`);
     const fetcher = vi.fn(async () => completion());
     const run = runner(fetcher, { now: () => now });
@@ -433,8 +475,9 @@ describe('Baseten estimate runner', () => {
     body.request.items[0].quantity = 40;
     await run(body);
     now = new Date('2026-10-04T12:00:00Z');
-    await run(body);
-    expect(fetcher).toHaveBeenCalledTimes(3);
+    const nextDay = await run(body);
+    expect(nextDay.provenance.cached).toBe(true);
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it('clears accepted estimates after credential rotation and can explicitly bypass cache', async () => {
@@ -488,31 +531,32 @@ describe('Baseten estimate runner', () => {
 
   it('expires cached estimates instead of keeping prices indefinitely', async () => {
     let now = new Date(`${AS_OF}T12:00:00Z`);
-    const fetcher = vi.fn(async () => completion());
+    const fetcher = vi.fn(async () => completion(futureOutput()));
     const run = runner(fetcher, { now: () => now });
     await run(input());
-    now = new Date(`${AS_OF}T12:11:00Z`);
+    now = new Date('2026-10-10T12:00:00Z');
     const result = await run(input());
     expect(fetcher).toHaveBeenCalledTimes(2);
     expect(result.provenance.cached).toBe(false);
   });
 
-  it('starts the full ten-minute cache lifetime after a successful generation completes', async () => {
+  it('starts the full seven-day cache lifetime after a successful generation completes without extending it on reads', async () => {
     let now = new Date(`${AS_OF}T12:00:00Z`);
     const call = heldModelCall();
-    const fetcher = vi.fn().mockImplementationOnce(call.fetcher).mockResolvedValue(completion());
+    const fetcher = vi.fn().mockImplementationOnce(call.fetcher).mockResolvedValue(completion(futureOutput()));
     const run = runner(fetcher, { now: () => now });
     const pending = run(input());
     await call.started;
     now = new Date(`${AS_OF}T12:09:00Z`);
-    call.complete();
+    call.complete(futureOutput());
     const first = await pending;
     expect(first.provenance.generatedAt).toBe(`${AS_OF}T12:09:00.000Z`);
-    now = new Date(`${AS_OF}T12:18:59Z`);
+    expect(first.provenance.expiresAt).toBe('2026-10-10T12:09:00.000Z');
+    now = new Date('2026-10-10T12:08:59Z');
     const hit = await run(input());
     expect(hit.provenance.cached).toBe(true);
     expect(fetcher).toHaveBeenCalledTimes(1);
-    now = new Date(`${AS_OF}T12:19:00Z`);
+    now = new Date('2026-10-10T12:09:00Z');
     const expired = await run(input());
     expect(expired.provenance.cached).toBe(false);
     expect(fetcher).toHaveBeenCalledTimes(2);
@@ -587,5 +631,268 @@ describe('Baseten estimate runner', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('Redis-backed estimate reuse and generation coordination', () => {
+  function persistentRunner(fetcher, cache, overrides = {}) {
+    return runner(fetcher, { persistentCache: cache, cacheWaitMs: 200, cachePollMs: 5, ...overrides });
+  }
+
+  it('reuses persisted facts after the application runner is recreated and recomputes constraints and relationships', async () => {
+    const cache = sharedRedis();
+    const firstFetcher = vi.fn(async () => completion());
+    const first = await persistentRunner(firstFetcher, cache)(input());
+    const replacementFetcher = vi.fn(async () => completion());
+    const replacement = persistentRunner(replacementFetcher, cache);
+    const changed = input();
+    changed.request.id = 'request-after-restart';
+    changed.request.items[0].id = 'item-after-restart';
+    changed.request.maxBudgetCents = 100;
+    changed.request.items[0].requiredDate = '2026-10-09';
+    changed.preference = 'earliest_delivery';
+    changed.request.selectedSupplierIds.reverse();
+    changed.suppliers.reverse();
+    const reused = await replacement(changed);
+    expect(firstFetcher).toHaveBeenCalledTimes(1);
+    expect(replacementFetcher).not.toHaveBeenCalled();
+    expect(reused.provenance).toMatchObject({ cached: true, generatedAt: first.provenance.generatedAt, expiresAt: first.provenance.expiresAt });
+    expect(reused.quotes.every((quote) => quote.requestId === changed.request.id && quote.items[0].requestedItemId === changed.request.items[0].id)).toBe(true);
+    expect(reused.comparisons.lowest_cost.outcome).toBe('no_feasible_quote');
+    expect(reused.comparisons.earliest_delivery.outcome).toBe('no_feasible_quote');
+    expect(cache.complete).toHaveBeenCalledTimes(1);
+    expect(cache.values).toHaveProperty('size', 1);
+    const serialized = [...cache.values.values()][0].value;
+    for (const credential of Object.values(fakeEnv)) expect(serialized).not.toContain(credential);
+    for (const [key] of cache.values) {
+      for (const credential of Object.values(fakeEnv)) expect(key).not.toContain(credential);
+    }
+  });
+
+  it('reuses an unchanged configuration across UTC midnight without a new generation', async () => {
+    let now = new Date('2026-10-03T23:59:00Z');
+    const cache = sharedRedis(() => now.getTime());
+    const fetcher = vi.fn(async () => completion());
+    const first = await persistentRunner(fetcher, cache, { now: () => now })(input());
+    now = new Date('2026-10-04T00:01:00Z');
+    const replacementFetcher = vi.fn(async () => completion());
+    const hit = await persistentRunner(replacementFetcher, cache, { now: () => now })(input());
+    expect(hit.provenance.cached).toBe(true);
+    expect(hit.provenance.generatedAt).toBe(first.provenance.generatedAt);
+    expect(replacementFetcher).not.toHaveBeenCalled();
+    expect(cache.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the original seven-day expiry across reads and application restarts', async () => {
+    let now = new Date(`${AS_OF}T12:00:00Z`);
+    const cache = sharedRedis(() => now.getTime());
+    const fetcher = vi.fn(async () => completion(futureOutput()));
+    const first = await persistentRunner(fetcher, cache, { now: () => now })(input());
+    expect(first.provenance.expiresAt).toBe('2026-10-10T12:00:00.000Z');
+    for (const date of ['2026-10-04T12:00:00Z', '2026-10-07T12:00:00Z', '2026-10-10T11:59:59Z']) {
+      now = new Date(date);
+      const hit = await persistentRunner(fetcher, cache, { now: () => now })(input());
+      expect(hit.provenance.cached).toBe(true);
+      expect(hit.provenance.expiresAt).toBe(first.provenance.expiresAt);
+    }
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(cache.complete).toHaveBeenCalledTimes(1);
+    now = new Date('2026-10-10T12:00:00Z');
+    const refreshed = await persistentRunner(fetcher, cache, { now: () => now })(input());
+    expect(refreshed.provenance.cached).toBe(false);
+    expect(refreshed.provenance.generatedAt).toBe('2026-10-10T12:00:00.000Z');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(cache.complete).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes the entire persisted batch once any delivery date is past even before the weekly expiry', async () => {
+    let now = new Date(`${AS_OF}T12:00:00Z`);
+    const cache = sharedRedis(() => now.getTime());
+    const soon = output();
+    soon.quotes[0].expected_delivery_date = '2026-10-06';
+    soon.quotes[1].expected_delivery_date = '2026-10-04';
+    soon.quotes[2].expected_delivery_date = '2026-10-05';
+    const fetcher = vi.fn().mockResolvedValueOnce(completion(soon)).mockResolvedValueOnce(completion(futureOutput()));
+    const first = await persistentRunner(fetcher, cache, { now: () => now })(input());
+    now = new Date('2026-10-05T12:00:00Z');
+    const refreshed = await persistentRunner(fetcher, cache, { now: () => now })(input());
+    expect(now.getTime()).toBeLessThan(Date.parse(first.provenance.expiresAt));
+    expect(refreshed.provenance.cached).toBe(false);
+    expect(refreshed.quotes.map((quote) => quote.items[0].expectedDate)).toEqual(futureOutput().quotes.map((quote) => quote.expected_delivery_date));
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+
+  it('persists a valid fallback after earlier generations become stale while crossing midnight', async () => {
+    let now = new Date('2026-10-03T23:59:59Z');
+    const cache = sharedRedis(() => now.getTime());
+    const stale = output();
+    stale.quotes.forEach((quote) => { quote.expected_delivery_date = AS_OF; });
+    const fetcher = vi.fn()
+      .mockImplementationOnce(async () => { now = new Date('2026-10-04T00:00:01Z'); return completion(stale); })
+      .mockResolvedValueOnce(completion(stale))
+      .mockResolvedValueOnce(completion(futureOutput()));
+    const result = await persistentRunner(fetcher, cache, { now: () => now })(input());
+    expect(result.provenance.model).toBe(MODEL_CONFIGS[2].model);
+    expect(result.provenance.attempts.map((attempt) => attempt.status)).toEqual(['invalid_output', 'invalid_output', 'ok']);
+    const replacementFetcher = vi.fn(async () => completion(futureOutput()));
+    const reused = await persistentRunner(replacementFetcher, cache, { now: () => now })(input());
+    expect(reused.provenance.cached).toBe(true);
+    expect(replacementFetcher).not.toHaveBeenCalled();
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it('shares one generation between independent server runners on a simultaneous Redis miss', async () => {
+    const cache = sharedRedis();
+    const call = heldModelCall();
+    const firstRunner = persistentRunner(call.fetcher, cache);
+    const secondRunner = persistentRunner(call.fetcher, cache);
+    const first = firstRunner(input());
+    await call.started;
+    const second = secondRunner(input());
+    await vi.waitFor(() => expect(cache.acquire.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 100, interval: 5 });
+    expect(call.fetcher).toHaveBeenCalledTimes(1);
+    call.complete();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+    expect(secondResult.quotes).toEqual(firstResult.quotes);
+    expect(secondResult.provenance.cached).toBe(true);
+    expect(call.fetcher).toHaveBeenCalledTimes(1);
+    expect(cache.complete).toHaveBeenCalledTimes(1);
+    expect(cache.locks.size).toBe(0);
+  });
+
+  it('cancels a lock waiter without cancelling another server runner\'s owned model call', async () => {
+    const cache = sharedRedis();
+    const call = heldModelCall();
+    const owner = persistentRunner(call.fetcher, cache)(input());
+    const modelSignal = await call.started;
+    const waiterFetcher = vi.fn(async () => completion());
+    const controller = new AbortController();
+    const waiter = persistentRunner(waiterFetcher, cache)(input(), { signal: controller.signal });
+    const rejected = expect(waiter).rejects.toMatchObject({ code: 'cancelled', status: 499 });
+    await vi.waitFor(() => expect(cache.acquire.mock.calls.length).toBeGreaterThanOrEqual(2), { timeout: 100, interval: 5 });
+    controller.abort();
+    await rejected;
+    expect(modelSignal.aborted).toBe(false);
+    expect(waiterFetcher).not.toHaveBeenCalled();
+    call.complete();
+    const ownerResult = await owner;
+    expect(ownerResult.quotes).toHaveLength(3);
+    expect(call.fetcher).toHaveBeenCalledTimes(1);
+    expect(cache.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['quantity', (body) => { body.request.items[0].quantity = 40; }],
+    ['item', (body) => { body.request.items[0].name = 'Folding chairs'; }],
+    ['unit', (body) => { body.request.items[0].unitLabel = 'boxes'; }],
+  ])('creates a separate persistent estimate for changed %s', async (_label, mutate) => {
+    const cache = sharedRedis();
+    const fetcher = vi.fn(async (_url, options) => {
+      const schema = JSON.parse(options.body).response_format.json_schema.schema;
+      const ids = schema.properties.quotes.items.properties.supplier_id.enum;
+      const value = output();
+      value.quotes = value.quotes.filter((quote) => ids.includes(quote.supplier_id));
+      return completion(value);
+    });
+    await persistentRunner(fetcher, cache)(input());
+    const changed = input();
+    mutate(changed);
+    const next = await persistentRunner(fetcher, cache)(changed);
+    expect(next.provenance.cached).toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(cache.values.size).toBe(2);
+  });
+
+  it('creates a separate persisted batch after adding another trusted supplier', async () => {
+    const cache = sharedRedis();
+    const extra = { id: 'local', name: 'Local Office Supply' };
+    const expandedCatalog = [...catalog, extra];
+    const fetcher = vi.fn(async (_url, options) => {
+      const schema = JSON.parse(options.body).response_format.json_schema.schema;
+      const ids = schema.properties.quotes.items.properties.supplier_id.enum;
+      const value = output();
+      if (ids.includes(extra.id)) value.quotes.push({ ...value.quotes[0], supplier_id: extra.id });
+      return completion(value);
+    });
+    await persistentRunner(fetcher, cache, { catalog: expandedCatalog })(input());
+    const changed = input();
+    changed.request.selectedSupplierIds.push(extra.id);
+    changed.suppliers.push(extra);
+    const next = await persistentRunner(fetcher, cache, { catalog: expandedCatalog })(changed);
+    expect(next.provenance.cached).toBe(false);
+    expect(next.quotes.map((quote) => quote.supplierId)).toContain(extra.id);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(cache.values.size).toBe(2);
+  });
+
+  it('does not use an old persisted namespace after credential or model-order changes', async () => {
+    const cache = sharedRedis();
+    const fetcher = vi.fn(async () => completion());
+    await persistentRunner(fetcher, cache)(input());
+    const rotated = { ...fakeEnv, [MODEL_CONFIGS[0].keyName]: 'rotated-test-only-key' };
+    await persistentRunner(fetcher, cache, { env: rotated })(input());
+    await persistentRunner(fetcher, cache, { env: { ...rotated, BASETEN_MODEL_ORDER: 'glm_fast,glm_flash,deepseek' } })(input());
+    expect(fetcher).toHaveBeenCalledTimes(3);
+    expect(cache.values.size).toBe(3);
+  });
+
+  it.each(['get', 'acquire'])('fails before invoking Baseten when Redis %s is unavailable', async (operation) => {
+    const cache = sharedRedis();
+    cache[operation].mockRejectedValue(new CacheError('cache_unavailable', 'Redis cache is unavailable. Please retry shortly.'));
+    const fetcher = vi.fn(async () => completion());
+    await expect(persistentRunner(fetcher, cache)(input())).rejects.toMatchObject({ code: 'cache_unavailable', status: 503 });
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['invalid JSON', () => '{'],
+    ['old schema version', (record) => JSON.stringify({ ...record, version: 'procurement-estimates-v3' })],
+    ['invalid supplier facts', (record) => {
+      record.generated.output.quotes[0].total_cents = -1;
+      return JSON.stringify(record);
+    }],
+  ])('regenerates safely after reading persisted %s', async (_label, corrupt) => {
+    const cache = sharedRedis();
+    const fetcher = vi.fn(async () => completion());
+    await persistentRunner(fetcher, cache)(input());
+    const [key, saved] = [...cache.values.entries()][0];
+    cache.values.set(key, { ...saved, value: corrupt(JSON.parse(saved.value)) });
+    const refreshed = await persistentRunner(fetcher, cache)(input());
+    expect(refreshed.provenance.cached).toBe(false);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(cache.values.get(key).value).version).toBe('procurement-estimates-v4');
+  });
+
+  it('does not publish offers or delete another owner\'s lock after losing its Redis lease', async () => {
+    const cache = sharedRedis();
+    const call = heldModelCall();
+    const pending = persistentRunner(call.fetcher, cache)(input());
+    const rejected = expect(pending).rejects.toMatchObject({ code: 'cache_lock_lost', status: 503 });
+    await call.started;
+    const [lockKey] = [...cache.locks.keys()];
+    cache.locks.set(lockKey, { token: 'new-owner-token', expiresAt: Date.now() + 10000 });
+    call.complete();
+    await rejected;
+    expect(cache.values.size).toBe(0);
+    expect(cache.locks.get(lockKey)?.token).toBe('new-owner-token');
+    expect(call.fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry paid generation or return unpersisted offers when the atomic Redis write fails', async () => {
+    const cache = sharedRedis();
+    cache.complete.mockRejectedValue(new CacheError('cache_unavailable', 'Redis cache is unavailable. Please retry shortly.'));
+    const fetcher = vi.fn(async () => completion());
+    await expect(persistentRunner(fetcher, cache)(input())).rejects.toMatchObject({ code: 'cache_unavailable', status: 503 });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(cache.complete).toHaveBeenCalledTimes(1);
+    expect(cache.values.size).toBe(0);
+  });
+
+  it('returns a bounded busy response instead of making a duplicate call when another server keeps the lock', async () => {
+    const cache = sharedRedis();
+    cache.acquire.mockResolvedValue(false);
+    const fetcher = vi.fn(async () => completion());
+    await expect(persistentRunner(fetcher, cache, { cacheWaitMs: 15, cachePollMs: 5 })(input())).rejects.toMatchObject({ code: 'cache_busy', status: 503 });
+    expect(fetcher).not.toHaveBeenCalled();
   });
 });

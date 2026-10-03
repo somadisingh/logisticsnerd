@@ -1,6 +1,6 @@
 import { compareQuotes } from './domain/compare';
 import type { ComparisonResult, ProcurementRequest, PurchasingPreference, SupplierQuote } from './domain/model';
-import { validateComparisonInput } from './domain/validate';
+import { isCalendarDate, validateComparisonInput } from './domain/validate';
 
 export interface EstimateProvenance {
   kind: 'ai_estimate';
@@ -9,6 +9,7 @@ export interface EstimateProvenance {
   cached: boolean;
   expiresAt?: string;
   cacheVersion?: string;
+  asOfDate?: string;
 }
 
 export interface EstimateResponse {
@@ -46,6 +47,7 @@ export function validateEstimateResponse(value: unknown, request: ProcurementReq
       || !text(provenance.generatedAt, 80) || !Number.isFinite(Date.parse(provenance.generatedAt)) || typeof provenance.cached !== 'boolean') throw new Error();
     if (provenance.expiresAt !== undefined && (!text(provenance.expiresAt, 80) || !Number.isFinite(Date.parse(provenance.expiresAt)))) throw new Error();
     if (provenance.cacheVersion !== undefined && !text(provenance.cacheVersion, 160)) throw new Error();
+    if (provenance.asOfDate !== undefined && (typeof provenance.asOfDate !== 'string' || !isCalendarDate(provenance.asOfDate))) throw new Error();
     if (!Array.isArray(value.assumptions) || value.assumptions.length > 12 || value.assumptions.some((assumption) => !text(assumption))) throw new Error();
     const quotes = value.quotes as SupplierQuote[];
     // Recompute both decisions rather than trusting recommendations in the response.
@@ -78,8 +80,8 @@ type EstimateGenerator = (
   signal: AbortSignal,
 ) => Promise<EstimateResponse>;
 
-const CACHE_VERSION = 'procurement-estimates-v3';
-const CACHE_TTL_MS = 10 * 60 * 1000;
+const CACHE_VERSION = 'procurement-estimates-v4';
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface CachedOffer {
   supplierId: string;
@@ -103,7 +105,7 @@ interface PendingEstimates {
 
 function normalize(value: string): string { return value.trim().replace(/\s+/g, ' ').toLowerCase(); }
 
-function cacheKey(request: ProcurementRequest, suppliers: EstimateSuppliers, timestamp: number): string {
+function cacheKey(request: ProcurementRequest, suppliers: EstimateSuppliers): string {
   validateComparisonInput(request, []);
   const selected = new Set(request.selectedSupplierIds);
   if (suppliers.length !== selected.size || new Set(suppliers.map((supplier) => supplier.id)).size !== selected.size
@@ -113,9 +115,14 @@ function cacheKey(request: ProcurementRequest, suppliers: EstimateSuppliers, tim
   const item = request.items[0];
   // Budget, deadline, preference and request IDs affect comparisons, not the generated offers.
   return JSON.stringify([
-    CACHE_VERSION, new Date(timestamp).toISOString().slice(0, 10), normalize(item.name), normalize(item.unitLabel ?? 'units'), item.quantity,
+    CACHE_VERSION, normalize(item.name), normalize(item.unitLabel ?? 'units'), item.quantity,
     suppliers.map((supplier) => [supplier.id, normalize(supplier.name)]).sort((a, b) => a[0].localeCompare(b[0])),
   ]);
+}
+
+function isFresh(estimates: CachedEstimates, timestamp: number): boolean {
+  const currentDate = new Date(timestamp).toISOString().slice(0, 10);
+  return estimates.expiresAt > timestamp && estimates.offers.every((offer) => offer.item.expectedDate >= currentDate);
 }
 
 function snapshotEstimates(response: EstimateResponse, receivedAt: number, ttlMs: number): CachedEstimates {
@@ -211,7 +218,11 @@ export function createEstimateClient(options: {
       entry.promise.then((estimates) => {
         if (!active) return;
         release();
-        try { resolve(responseForRequest(estimates, request, joined)); }
+        try {
+          const response = responseForRequest(estimates, request, joined);
+          if (!isFresh(estimates, now())) throw new EstimateError('The estimates expired or their delivery dates have passed. Please generate fresh estimates.', 'invalid_response');
+          resolve(response);
+        }
         catch (error) { reject(error); }
       }, (error) => {
         if (!active) return;
@@ -226,13 +237,16 @@ export function createEstimateClient(options: {
     const capturedRequest = structuredClone(request);
     const capturedSuppliers = structuredClone(suppliers);
     const requestedAt = now();
-    const key = cacheKey(capturedRequest, capturedSuppliers, requestedAt);
-    for (const [entryKey, entry] of completed) if (entry.expiresAt <= requestedAt) completed.delete(entryKey);
+    const key = cacheKey(capturedRequest, capturedSuppliers);
+    for (const [entryKey, entry] of completed) if (!isFresh(entry, requestedAt)) completed.delete(entryKey);
     const existing = completed.get(key);
     if (existing) {
+      const response = responseForRequest(existing, capturedRequest, true);
       completed.delete(key);
-      completed.set(key, existing);
-      return responseForRequest(existing, capturedRequest, true);
+      if (isFresh(existing, now())) {
+        completed.set(key, existing);
+        return response;
+      }
     }
     const active = pending.get(key);
     if (active && !active.controller.signal.aborted) return subscribe(active, capturedRequest, signal, true);
@@ -242,11 +256,8 @@ export function createEstimateClient(options: {
     entry.promise = fetchEstimates(fetcher, capturedRequest, capturedSuppliers, preference, controller).then((response) => {
       const receivedAt = now();
       const estimates = snapshotEstimates(response, receivedAt, ttlMs);
-      const generatedDay = new Date(response.provenance.generatedAt).toISOString().slice(0, 10);
-      const currentDay = new Date(receivedAt).toISOString().slice(0, 10);
-      if (!controller.signal.aborted && estimates.expiresAt > receivedAt && generatedDay === currentDay
-        && (response.provenance.cacheVersion === undefined || response.provenance.cacheVersion === CACHE_VERSION)
-        && key === cacheKey(capturedRequest, capturedSuppliers, receivedAt)) {
+      if (!isFresh(estimates, receivedAt)) throw new EstimateError('The estimates expired or their delivery dates have passed. Please generate fresh estimates.', 'invalid_response');
+      if (!controller.signal.aborted && (response.provenance.cacheVersion === undefined || response.provenance.cacheVersion === CACHE_VERSION)) {
         completed.delete(key);
         completed.set(key, estimates);
         while (completed.size > maxEntries) completed.delete(completed.keys().next().value!);

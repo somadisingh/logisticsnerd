@@ -1,6 +1,8 @@
+import { createHash, randomUUID } from 'node:crypto';
+
 const ENDPOINT = 'https://inference.baseten.co/v1/chat/completions';
-const PROMPT_VERSION = 'procurement-estimates-v3';
-const CACHE_MS = 10 * 60 * 1000;
+const PROMPT_VERSION = 'procurement-estimates-v4';
+const CACHE_MS = 7 * 24 * 60 * 60 * 1000;
 export const MODEL_CONFIGS = [
   { id: 'deepseek', model: 'deepseek-ai/DeepSeek-V4.1-Flash', keyName: 'BASETEN_DEEPSEEK_API_KEY', reasoningEffort: 'none' },
   { id: 'glm_flash', model: 'zai-org/GLM-5.3-Flash', keyName: 'BASETEN_GLM_FLASH_API_KEY', reasoningEffort: 'low' },
@@ -181,19 +183,65 @@ function subscribeToGeneration(entry, signal) {
   });
 }
 
-export function createEstimateRunner({ env = {}, fetcher = fetch, rules, catalog, now = () => new Date(), timeoutMs = 18000, overallTimeoutMs = 45000, maxConcurrentGenerations = 2 }) {
+function reusableGeneration(generated, timestamp) {
+  const today = new Date(timestamp).toISOString().slice(0, 10);
+  return generated.expiresAt > timestamp && (generated.output.status === 'needs_clarification'
+    || generated.output.quotes.every((quote) => quote.expected_delivery_date >= today));
+}
+
+// Redis is outside the process trust boundary. Revalidate saved records before reuse.
+function readSavedGeneration(serialized, input, models, timestamp) {
+  if (typeof serialized !== 'string' || serialized.length > 40000) return null;
+  try {
+    const record = JSON.parse(serialized);
+    if (!exactKeys(record, ['version', 'generated']) || record.version !== PROMPT_VERSION) return null;
+    const value = record.generated;
+    if (!exactKeys(value, ['output', 'usage', 'model', 'generatedAt', 'asOfDate', 'expiresAt', 'durationMs', 'attempts'])) return null;
+    const generatedAt = Date.parse(value.generatedAt);
+    const today = new Date(timestamp).toISOString().slice(0, 10);
+    if (!models.some((model) => model.model === value.model) || !calendarDate(value.asOfDate) || value.asOfDate > today
+      || !Number.isFinite(generatedAt) || generatedAt > timestamp + 30000 || generatedAt < Date.parse(value.asOfDate)
+      || !Number.isSafeInteger(value.expiresAt) || value.expiresAt !== generatedAt + CACHE_MS
+      || !Number.isFinite(value.durationMs) || value.durationMs < 0 || !Array.isArray(value.attempts) || value.attempts.length > models.length
+      || !exactKeys(value.usage, ['inputTokens', 'outputTokens'])
+      || Object.values(value.usage).some((tokens) => tokens !== null && (!Number.isSafeInteger(tokens) || tokens < 0))) return null;
+    for (const attempt of value.attempts) {
+      if (!isObject(attempt) || !models.some((model) => model.model === attempt.model) || !boundedString(attempt.status, 80)
+        || !Number.isFinite(attempt.durationMs) || attempt.durationMs < 0
+        || Object.keys(attempt).some((key) => !['model', 'status', 'durationMs', 'httpStatus'].includes(key))
+        || (attempt.httpStatus !== undefined && attempt.httpStatus !== null && !integer(attempt.httpStatus, 599))) return null;
+    }
+    value.output = validateModelOutput(value.output, input, value.asOfDate);
+    return reusableGeneration(value, timestamp) ? value : null;
+  } catch { return null; }
+}
+
+export function createEstimateRunner({
+  env = {}, fetcher = fetch, rules, catalog, now = () => new Date(), timeoutMs = 18000,
+  overallTimeoutMs = 45000, maxConcurrentGenerations = 2, persistentCache = null,
+  cacheWaitMs = 50000, cachePollMs = 500,
+}) {
   const getEnv = typeof env === 'function' ? env : () => env;
   const cache = new Map();
-  // Pending work is separate: eviction of a saved result cannot duplicate a call.
   const pending = new Map();
   let activeGenerations = 0;
   let signature;
   let cooldownUntil = 0;
+  const remember = (key, generated) => {
+    for (const [savedKey, value] of cache) if (!reusableGeneration(value, now().getTime())) cache.delete(savedKey);
+    cache.delete(key);
+    cache.set(key, generated);
+    while (cache.size > 100) cache.delete(cache.keys().next().value);
+  };
   return async (body, { modelIds, bypassCache = false, signal } = {}) => {
     if (signal?.aborted) throw new EstimateError('cancelled', 'Estimate request cancelled.', 499);
     const input = validateEstimateInput(body, catalog, rules.validateComparisonInput);
     const settings = getEnv();
-    const nextSignature = JSON.stringify([settings.BASETEN_MODEL_ORDER, ...MODEL_CONFIGS.map((model) => settings[model.keyName])]);
+    // Private configuration fingerprints never expose credentials in Redis keys.
+    const credentialVersion = createHash('sha256').update(JSON.stringify([
+      settings.BASETEN_MODEL_ORDER, ...MODEL_CONFIGS.map((model) => settings[model.keyName]),
+    ])).digest('hex');
+    const nextSignature = createHash('sha256').update(JSON.stringify([credentialVersion, settings.REDIS_URL])).digest('hex');
     if (signature !== nextSignature) {
       cache.clear(); cooldownUntil = 0; signature = nextSignature;
       for (const entry of pending.values()) entry.controller.abort();
@@ -203,76 +251,137 @@ export function createEstimateRunner({ env = {}, fetcher = fetch, rules, catalog
     if (!models.length) throw new EstimateError('needs_credentials', 'Add a Baseten key to .env.local to generate estimates, or choose sample data.', 503);
     const asOfDate = now().toISOString().slice(0, 10);
     const item = input.request.items[0];
-    // Constraints and preference change comparisons, not the hypothetical facts.
-    const cacheKey = JSON.stringify([PROMPT_VERSION, asOfDate, item.name.toLowerCase(), item.unitLabel.toLowerCase(), item.quantity, [...input.suppliers].sort((a, b) => a.id.localeCompare(b.id)), modelIds ?? null]);
+    // No daily key: the original offers can remain reusable for up to one week.
+    const digest = createHash('sha256').update(JSON.stringify([
+      PROMPT_VERSION, item.name.toLowerCase(), item.unitLabel.toLowerCase(), item.quantity,
+      [...input.suppliers].sort((a, b) => a.id.localeCompare(b.id)), credentialVersion,
+      models.map(({ model, reasoningEffort }) => [model, reasoningEffort]),
+    ])).digest('hex');
+    const cacheKey = `logisticsnerd:estimates:v4:{${digest}}:data`;
+    const lockKey = `logisticsnerd:estimates:v4:{${digest}}:lock`;
     const existing = !bypassCache && cache.get(cacheKey);
     let generated;
-    let cached = !!existing && existing.expiresAt > now().getTime();
+    let cached = !!existing && reusableGeneration(existing, now().getTime());
     if (cached) {
-      generated = existing.generated;
-      // Bounded least-recently-used saved facts, without refreshing their expiry.
+      generated = existing;
       cache.delete(cacheKey); cache.set(cacheKey, existing);
     } else {
       if (existing) cache.delete(cacheKey);
       let entry = pending.get(cacheKey);
       if (entry?.controller.signal.aborted) entry = null;
-      cached = !!entry;
+      const joined = !!entry;
       if (!entry) {
-        if (Date.now() < cooldownUntil) throw new EstimateError('rate_limited', 'Baseten requested a pause. Try again shortly.', 503);
-        if (activeGenerations >= maxConcurrentGenerations) throw new EstimateError('busy', 'Other estimates are being generated. Please retry shortly.', 429);
         entry = { controller: new AbortController(), subscribers: 0, settled: false, promise: null };
         const shared = entry;
-        activeGenerations += 1;
-        const generation = (async () => {
-          const startedAt = Date.now();
-          const deadline = startedAt + overallTimeoutMs;
-          const overallSignal = AbortSignal.any([AbortSignal.timeout(overallTimeoutMs), shared.controller.signal]);
-          const attempts = [];
-          let lastError = new EstimateError('provider_unavailable', 'No model could generate valid estimates. Please retry.', 503);
-          for (const model of models) {
-            const remaining = deadline - Date.now();
-            if (remaining <= 0) break;
-            const started = Date.now();
-            try {
-              const result = await callModel(model, settings[model.keyName].trim(), input, asOfDate, fetcher, Math.min(timeoutMs, remaining), overallSignal);
-              if (shared.controller.signal.aborted) throw new EstimateError('cancelled', 'Estimate request cancelled.', 499);
-              attempts.push({ model: model.model, status: 'ok', durationMs: Date.now() - started });
-              const generatedAt = now();
-              return { ...result, model: model.model, generatedAt: generatedAt.toISOString(), asOfDate, expiresAt: generatedAt.getTime() + CACHE_MS, durationMs: Date.now() - startedAt, attempts };
-            } catch (error) {
-              if (shared.controller.signal.aborted) throw new EstimateError('cancelled', 'Estimate request cancelled.', 499);
-              lastError = error instanceof EstimateError ? error : invalidOutput();
-              attempts.push({ model: model.model, status: lastError.code, durationMs: Date.now() - started, httpStatus: lastError.httpStatus ?? null });
-              if (['auth_failed', 'billing_failed', 'config_error'].includes(lastError.code)) break;
-              if (Number.isFinite(lastError.retryAfterMs) && lastError.retryAfterMs > 0) {
-                cooldownUntil = Math.max(cooldownUntil, Date.now() + lastError.retryAfterMs);
-                if (lastError.retryAfterMs >= deadline - Date.now()) break;
-                await abortableDelay(lastError.retryAfterMs, overallSignal);
-              } else if (['rate_limited', 'provider_unavailable'].includes(lastError.code) && deadline - Date.now() > 250) {
-                await abortableDelay(250, overallSignal);
+        const checkActive = () => {
+          if (shared.controller.signal.aborted || signature !== nextSignature) throw new EstimateError('cancelled', 'Estimate request cancelled.', 499);
+        };
+        const generate = async () => {
+          checkActive();
+          if (Date.now() < cooldownUntil) throw new EstimateError('rate_limited', 'Baseten requested a pause. Try again shortly.', 503);
+          if (activeGenerations >= maxConcurrentGenerations) throw new EstimateError('busy', 'Other estimates are being generated. Please retry shortly.', 429);
+          activeGenerations += 1;
+          try {
+            const startedAt = Date.now();
+            const deadline = startedAt + overallTimeoutMs;
+            const overallSignal = AbortSignal.any([AbortSignal.timeout(overallTimeoutMs), shared.controller.signal]);
+            const attempts = [];
+            let lastError = new EstimateError('provider_unavailable', 'No model could generate valid estimates. Please retry.', 503);
+            for (const model of models) {
+              const remaining = deadline - Date.now();
+              if (remaining <= 0 || overallSignal.aborted) break;
+              const started = Date.now();
+              try {
+                const result = await callModel(model, settings[model.keyName].trim(), input, asOfDate, fetcher, Math.min(timeoutMs, remaining), overallSignal);
+                checkActive();
+                const generatedAt = now();
+                const value = { ...result, model: model.model, generatedAt: generatedAt.toISOString(), asOfDate, expiresAt: generatedAt.getTime() + CACHE_MS, durationMs: Date.now() - startedAt, attempts };
+                if (!reusableGeneration(value, generatedAt.getTime())) throw invalidOutput();
+                attempts.push({ model: model.model, status: 'ok', durationMs: Date.now() - started });
+                return value;
+              } catch (error) {
+                checkActive();
+                lastError = error instanceof EstimateError ? error : invalidOutput();
+                attempts.push({ model: model.model, status: lastError.code, durationMs: Date.now() - started, httpStatus: lastError.httpStatus ?? null });
+                if (['auth_failed', 'billing_failed', 'config_error'].includes(lastError.code)) break;
+                if (Number.isFinite(lastError.retryAfterMs) && lastError.retryAfterMs > 0) {
+                  cooldownUntil = Math.max(cooldownUntil, Date.now() + lastError.retryAfterMs);
+                  if (lastError.retryAfterMs >= deadline - Date.now()) break;
+                  await abortableDelay(lastError.retryAfterMs, overallSignal);
+                } else if (['rate_limited', 'provider_unavailable'].includes(lastError.code) && deadline - Date.now() > 250) {
+                  await abortableDelay(250, overallSignal);
+                }
               }
             }
+            lastError.attempts = attempts;
+            throw lastError;
+          } finally { activeGenerations -= 1; }
+        };
+        const transaction = async () => {
+          // The live middleware always supplies Redis. The memory path supports
+          // isolated contract tests and the explicit provider evaluation CLI.
+          if (bypassCache || !persistentCache) {
+            const value = await generate();
+            checkActive();
+            if (!bypassCache) remember(cacheKey, value);
+            return { generated: value, cached: false };
           }
-          lastError.attempts = attempts;
-          throw lastError;
-        })();
-        shared.promise = generation.then((value) => {
-          if (!bypassCache && !shared.controller.signal.aborted && signature === nextSignature && now().toISOString().slice(0, 10) === asOfDate) {
-            for (const [key, saved] of cache) if (saved.expiresAt <= now().getTime()) cache.delete(key);
-            if (cache.size >= 100) cache.delete(cache.keys().next().value);
-            cache.set(cacheKey, { generated: value, expiresAt: value.expiresAt });
+          if (!persistentCache.configured()) throw new EstimateError('needs_cache_configuration', 'Add REDIS_URL to .env.local to enable the persistent estimate cache.', 503);
+          const read = async () => {
+            const serialized = await persistentCache.get(cacheKey, { signal: shared.controller.signal });
+            checkActive();
+            return readSavedGeneration(serialized, input, models, now().getTime());
+          };
+          let saved = await read();
+          if (saved) { remember(cacheKey, saved); return { generated: saved, cached: true }; }
+          const token = randomUUID();
+          const leaseMs = Math.max(90000, overallTimeoutMs + 15000);
+          const acquired = await persistentCache.acquire(lockKey, token, leaseMs, { signal: shared.controller.signal });
+          if (!acquired) {
+            // Wait for the other instance's result; never start an uncoordinated
+            // paid call when an owner fails or Redis becomes unavailable.
+            const waitDeadline = Date.now() + cacheWaitMs;
+            while (Date.now() < waitDeadline) {
+              await abortableDelay(Math.min(cachePollMs, Math.max(1, waitDeadline - Date.now())), shared.controller.signal);
+              saved = await read();
+              if (saved) { remember(cacheKey, saved); return { generated: saved, cached: true }; }
+            }
+            throw new EstimateError('cache_busy', 'These estimates are still being prepared. Please try again shortly.', 503);
           }
-          return value;
-        }).finally(() => {
+          let ownsLock = true;
+          try {
+            checkActive();
+            // Close the race between the initial read and acquiring the lease.
+            saved = await read();
+            if (saved) { remember(cacheKey, saved); return { generated: saved, cached: true }; }
+            const value = await generate();
+            checkActive();
+            const ttlMs = value.expiresAt - now().getTime();
+            if (ttlMs <= 0 || !reusableGeneration(value, now().getTime())) throw invalidOutput();
+            const stored = await persistentCache.complete(lockKey, token, cacheKey, JSON.stringify({ version: PROMPT_VERSION, generated: value }), ttlMs, { signal: shared.controller.signal });
+            if (!stored) throw new EstimateError('cache_lock_lost', 'The estimate cache could not save this result safely. Please try again.', 503);
+            ownsLock = false;
+            checkActive();
+            remember(cacheKey, value);
+            return { generated: value, cached: false };
+          } finally {
+            if (ownsLock) {
+              // Releasing only our token is safe even after cancellation. An
+              // unavailable connection leaves a lease that expires on its own.
+              try { await persistentCache.release(lockKey, token); } catch { /* No replay or extra inference. */ }
+            }
+          }
+        };
+        shared.promise = transaction().finally(() => {
           shared.settled = true;
-          activeGenerations -= 1;
           if (pending.get(cacheKey) === shared) pending.delete(cacheKey);
         });
-        // A cancelled last subscriber still leaves a safely handled promise.
         shared.promise.catch(() => {});
         pending.set(cacheKey, shared);
       }
-      generated = await subscribeToGeneration(entry, signal);
+      const result = await subscribeToGeneration(entry, signal);
+      generated = result.generated;
+      cached = joined || result.cached;
     }
     if (signal?.aborted) throw new EstimateError('cancelled', 'Estimate request cancelled.', 499);
     if (generated.output.status === 'needs_clarification') {
@@ -288,7 +397,7 @@ export function createEstimateRunner({ env = {}, fetcher = fetch, rules, catalog
     return {
       quotes,
       comparisons: { lowest_cost: rules.compareQuotes(input.request, quotes, 'lowest_cost'), earliest_delivery: rules.compareQuotes(input.request, quotes, 'earliest_delivery') },
-      provenance: { kind: 'ai_estimate', model: generated.model, generatedAt: generated.generatedAt, expiresAt: new Date(generated.expiresAt).toISOString(), cacheVersion: PROMPT_VERSION, asOfDate: generated.asOfDate, cached, durationMs: generated.durationMs, usage: generated.usage, attempts: generated.attempts },
+      provenance: { kind: 'ai_estimate', model: generated.model, generatedAt: generated.generatedAt, expiresAt: new Date(generated.expiresAt).toISOString(), cacheVersion: PROMPT_VERSION, asOfDate: generated.asOfDate, cached, durationMs: generated.durationMs, usage: structuredClone(generated.usage), attempts: structuredClone(generated.attempts) },
       assumptions: [...generated.output.assumptions],
     };
   };
