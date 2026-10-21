@@ -1,6 +1,15 @@
 # LogisticsNerd
 
-LogisticsNerd is a focused supplier-selection demo for small businesses buying ordinary goods, such as office supplies, packaging, and inventory.
+LogisticsNerd is being developed as reusable Python business rules for OperationsNerd. The standalone order → reservation → shortage → supplier recommendation → explicit purchase approval → receiving → fulfillment rules now have an **in-memory repository**, deterministic tests and a runnable demo. This is not a persistent integrated workflow or a separate CRM.
+
+```sh
+python3 -m unittest discover -s tests_python -v
+python3 -m logistics_rules.demo
+```
+
+No Python dependencies, API keys or network calls are needed. Supplier data is synthetic. Read the [standalone guide and actual results](docs/standalone/README.md), [verified core/ID mapping](docs/standalone/core-mapping.md), [revised schema proposal](docs/standalone/schema-proposal.md), and [proposed integration contract](docs/standalone/integration-plan.md). Shared-database migrations, item/stock mapping, authentication integration, backend and UI connections remain subject to explicit approval. No OperationsNerd application files were changed.
+
+The existing supplier-selection demo below remains available for small businesses comparing ordinary goods, such as office supplies, packaging, and inventory.
 
 It answers a simple buying question: **Which selected supplier can provide the required quantity by the deadline at the cheapest price?** An optional maximum budget can also constrain the choice. Buyers can now choose **Earliest delivery** instead; the same quantity, deadline, and budget requirements still apply.
 

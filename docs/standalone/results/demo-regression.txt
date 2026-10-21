@@ -1,0 +1,58 @@
+$ npm test
+
+> logisticsnerd@0.1.0 test
+> vitest run
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - JSON import "./data/demo.json" without import attributes (src/data.ts:1:18). Add `with { type: 'json' }`
+  - JSON import "./data/scenarios.json" without import attributes (src/data.ts:2:22). Add `with { type: 'json' }`
+  - import "./model" without a file extension (src/domain/compare.ts:1:119). Add the file extension
+  - import "./model" without a file extension (src/domain/validate.ts:1:83). Add the file extension
+  - import "./domain/model" without a file extension (src/data.ts:3:80). Add the file extension
+  - import "./validate" without a file extension (src/domain/compare.ts:2:41). Add the file extension
+  - import "./domain/validate" without a file extension (src/data.ts:4:43). Add the file extension
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+
+ RUN  v5.0.2 /Users/somaditya/Logistics Nerd/logisticsnerd
+
+
+ Test Files  7 passed (7)
+      Tests  242 passed (242)
+   Start at  19:09:03
+   Duration  1.64s (tests 74%, transform 17%, import 9%, worker 1%)
+
+
+Exit status: 0
+
+$ npm run build
+
+> logisticsnerd@0.1.0 build
+> tsc --noEmit && vite build
+
+(!) Your Vite config uses features that are unsupported by `configLoader: 'native'`, which is planned to become the default in a future major version of Vite:
+  - JSON import "./data/demo.json" without import attributes (src/data.ts:1:18). Add `with { type: 'json' }`
+  - JSON import "./data/scenarios.json" without import attributes (src/data.ts:2:22). Add `with { type: 'json' }`
+  - import "./domain/model" without a file extension (src/data.ts:3:80). Add the file extension
+  - import "./model" without a file extension (src/domain/validate.ts:1:83). Add the file extension
+  - import "./model" without a file extension (src/domain/compare.ts:1:119). Add the file extension
+  - import "./domain/validate" without a file extension (src/data.ts:4:43). Add the file extension
+  - import "./validate" without a file extension (src/domain/compare.ts:2:41). Add the file extension
+Set `VITE_CONFIG_NATIVE_IGNORE_WARNING=true` to suppress this warning.
+vite v8.3.1 building client environment for production...
+transforming...
+✓ 17 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/shipping-lab.html                                     0.69 kB │ gzip:  0.38 kB
+dist/index.html                                            0.75 kB │ gzip:  0.43 kB
+dist/assets/dm-sans-latin-ext-wght-normal-BOFOeGcA.woff2  18.22 kB
+dist/assets/dm-sans-latin-wght-normal-Xz1IZZA0.woff2      36.93 kB
+dist/assets/shipping-CxTfjNnZ.css                          3.20 kB │ gzip:  1.00 kB
+dist/assets/icons-B2H5MsYv.css                            31.55 kB │ gzip:  7.52 kB
+dist/assets/icons-Cb_lhK7i.js                              2.39 kB │ gzip:  1.20 kB
+dist/assets/shipping-BEffagKt.js                           9.53 kB │ gzip:  3.63 kB
+dist/assets/main-H6qOHX1x.js                              45.32 kB │ gzip: 13.98 kB
+
+✓ built in 51ms
+
+Exit status: 0

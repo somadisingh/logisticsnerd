@@ -1,0 +1,89 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="app.diagrams.net" compressed="false" agent="LogisticsNerd standalone proposal">
+  <diagram id="shared-logistics-proposal-v1" name="Shared DB proposal - not applied">
+    <mxGraphModel grid="1" gridSize="10" page="0" background="#FFFFFF">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="&lt;b&gt;LogisticsNerd — shared-database proposal&lt;/b&gt;&lt;br&gt;Design only • one location/company • approval required • core item/party mapping unresolved" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e2e8f0;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="20" y="10" width="1800" height="80" />
+        </mxCell>
+        <mxCell id="businesses" value="&lt;b&gt;businesses&lt;/b&gt;&lt;br&gt;&lt;i&gt;VERIFIED CORE&lt;/i&gt;&lt;br&gt;&lt;br&gt;id PK&lt;br&gt;owner_key / current_version (upstream)&lt;br&gt;company mapping: confirm&lt;br&gt;reuse core ID; authenticated owner" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e2e8f0;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="20" y="120" width="390" height="210" />
+        </mxCell>
+        <mxCell id="contacts" value="&lt;b&gt;contacts&lt;/b&gt;&lt;br&gt;&lt;i&gt;LEGACY CORE / MAPPING OPEN&lt;/i&gt;&lt;br&gt;&lt;br&gt;(business_id, id) candidate key proposed&lt;br&gt;customer / supplier namespace unresolved&lt;br&gt;generic entities IDs are distinct&lt;br&gt;do not create duplicate parties" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e2e8f0;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="20" y="400" width="390" height="220" />
+        </mxCell>
+        <mxCell id="items" value="&lt;b&gt;items&lt;/b&gt;&lt;br&gt;&lt;i&gt;FUTURE SHARED AUTHORITY&lt;/i&gt;&lt;br&gt;&lt;br&gt;business_id, id composite candidate key&lt;br&gt;UNIQUE (business_id, sku)&lt;br&gt;name, unit; item authority unbuilt&lt;br&gt;confirm mapping before persistence" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ccfbf1;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="20" y="700" width="390" height="230" />
+        </mxCell>
+        <mxCell id="orders" value="&lt;b&gt;orders&lt;/b&gt;&lt;br&gt;&lt;i&gt;PROPOSED LOGISTICS&lt;/i&gt;&lt;br&gt;&lt;br&gt;business_id, id; customer reference&lt;br&gt;currency; created_at; state&lt;br&gt;fulfilled_at NULL until action&lt;br&gt;same-company composite customer FK" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="480" y="120" width="390" height="230" />
+        </mxCell>
+        <mxCell id="order_lines" value="&lt;b&gt;order_lines&lt;/b&gt;&lt;br&gt;&lt;i&gt;PROPOSED LOGISTICS&lt;/i&gt;&lt;br&gt;&lt;br&gt;business_id, id; order_id; item_id&lt;br&gt;quantity; deadline; purchase budget&lt;br&gt;priority; original_shortage snapshot&lt;br&gt;UNIQUE (business_id, order_id, item_id)&lt;br&gt;quantity_to_purchase: DERIVED&lt;br&gt;demand - reserved - approved inbound" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="480" y="430" width="390" height="290" />
+        </mxCell>
+        <mxCell id="supplier_quotes" value="&lt;b&gt;supplier_quotes&lt;/b&gt;&lt;br&gt;&lt;i&gt;PROPOSED IMMUTABLE TERMS&lt;/i&gt;&lt;br&gt;&lt;br&gt;business_id, id; order_line_id; supplier&lt;br&gt;capacity != quantity_priced&lt;br&gt;unit/exact total price; currency&lt;br&gt;source; generated_at; expires_at&lt;br&gt;expected_date; estimate labels&lt;br&gt;same-company line and supplier FKs" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="940" y="120" width="390" height="290" />
+        </mxCell>
+        <mxCell id="purchase_orders" value="&lt;b&gt;purchase_orders&lt;/b&gt;&lt;br&gt;&lt;i&gt;PROPOSED SPLIT PURCHASES&lt;/i&gt;&lt;br&gt;&lt;br&gt;business_id, id; order_line_id&lt;br&gt;selected_quote_id UNIQUE per company&lt;br&gt;purchased qty; agreed price/currency&lt;br&gt;approver; approval_id/time&lt;br&gt;immutable terms snapshot or quote&lt;br&gt;received_at NULL until receipt&lt;br&gt;NO unique order_line restriction&lt;br&gt;FK (company, quote, line) together" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1400" y="120" width="420" height="350" />
+        </mxCell>
+        <mxCell id="stock_balances" value="&lt;b&gt;stock_balances&lt;/b&gt;&lt;br&gt;&lt;i&gt;EXTRA: ONE STOCK AUTHORITY&lt;/i&gt;&lt;br&gt;&lt;br&gt;PK (business_id, item_id)&lt;br&gt;on_hand &amp;gt;= 0; one implicit location&lt;br&gt;reuse core stock if it later exists&lt;br&gt;no duplicate catalog/stock authority" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="940" y="570" width="390" height="220" />
+        </mxCell>
+        <mxCell id="stock_reservations" value="&lt;b&gt;stock_reservations&lt;/b&gt;&lt;br&gt;&lt;i&gt;EXTRA: EXPLICIT ALLOCATION&lt;/i&gt;&lt;br&gt;&lt;br&gt;business_id, order_line_id, item_id&lt;br&gt;quantity &amp;gt;= 0; active unfinished demand&lt;br&gt;FK company + line + matching item&lt;br&gt;sum active &amp;lt;= on_hand in transaction&lt;br&gt;receipt moves inbound into reservation" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1400" y="570" width="420" height="240" />
+        </mxCell>
+        <mxCell id="logistics_operations" value="&lt;b&gt;logistics_operations&lt;/b&gt;&lt;br&gt;&lt;i&gt;EXTRA: DURABLE REPLAY&lt;/i&gt;&lt;br&gt;&lt;br&gt;PK (business_id, operation_key); request version/hash/payload; original result&lt;br&gt;UNIQUE business event for approval/receipt/fulfillment across request keys&lt;br&gt;stock + reservation + lifecycle + result must commit together&lt;br&gt;timestamps alone are insufficient; in-memory adapter is not durable" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#dbeafe;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="480" y="840" width="850" height="210" />
+        </mxCell>
+        <mxCell id="rel-0" value="company" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="contacts" target="businesses">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-1" value="company" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="items" target="businesses">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-2" value="company" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="orders" target="businesses">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-3" value="customer: mapping open" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="orders" target="contacts">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-4" value="company + order" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="order_lines" target="orders">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-5" value="company + item" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="order_lines" target="items">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-6" value="company + line" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="supplier_quotes" target="order_lines">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-7" value="supplier: mapping open" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="supplier_quotes" target="contacts">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-8" value="company + quote + SAME line" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="purchase_orders" target="supplier_quotes">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-9" value="many POs / line" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="purchase_orders" target="order_lines">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-10" value="company + item" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="stock_balances" target="items">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-11" value="company + line + SAME item" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="stock_reservations" target="order_lines">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-12" value="transactional balance check" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="stock_reservations" target="stock_balances">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="rel-13" value="company; atomic durable result" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=ERone;startArrow=ERmany;strokeColor=#94a3b8;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="logistics_operations" target="businesses">
+          <mxGeometry as="geometry" relative="1" />
+        </mxCell>
+        <mxCell id="gates" value="&lt;b&gt;Stop before integration&lt;/b&gt;&lt;br&gt;Approve item/stock mapping, company isolation, module contract and split sourcing first.&lt;br&gt;Wider core migrations separately reviewed. Accounting owner/interface unresolved.&lt;br&gt;No SQL migration, backend endpoint, UI connection or production accounting is implemented." style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fef3c7;strokeColor=#64748b;align=left;verticalAlign=top;spacing=14;fontSize=16;" vertex="1" parent="1">
+          <mxGeometry as="geometry" x="1400" y="880" width="420" height="210" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

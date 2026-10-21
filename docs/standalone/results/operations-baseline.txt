@@ -1,0 +1,37 @@
+$ git status --short --branch
+## main...origin/main [behind 29]
+?? documentation/logisticsnerd/
+Exit status: 0
+
+$ git branch --show-current
+main
+Exit status: 0
+
+$ git remote -v
+origin	https://github.com/AmaanIlahi/OperationsNerd.git (fetch)
+origin	https://github.com/AmaanIlahi/OperationsNerd.git (push)
+Exit status: 0
+
+$ git rev-parse HEAD
+622d8d7b47378c3e427212859d90a52eccfeb040
+Exit status: 0
+
+$ git rev-parse origin/main
+dbff470c96f6d82e9752d18638c42b20a4ca7d21
+Exit status: 0
+
+$ git rev-list --left-right --count HEAD...origin/main
+0	29
+Exit status: 0
+
+PR14 dbff470 ancestor of HEAD: False (exit 1)
+
+PR14 dbff470 ancestor of origin/main: True (exit 0)
+
+PR15 5346d28 ancestor of HEAD: False (exit 1)
+
+PR15 5346d28 ancestor of origin/main: True (exit 0)
+
+5fde52920cad1cfe0783bc4f3df84727cf9375a7e6644223ae8970f57c960abd  logisticsnerd-starter-clean.drawio
+
+5f35d4562ef08231bf273ec0c48cf19946565264cfb098b35935d1fd105617ea  starter-schema.sql

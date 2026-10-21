@@ -1,0 +1,24 @@
+$ python3 -m logistics_rules.demo
+LogisticsNerd standalone demo | in-memory repository | synthetic supplier data
+Currency USD; one stock location; no network, model, database, backend, or UI calls
+Other order reserves 2: on_hand=6, reserved=2, available=4
+Customer demand=15; reserved=4; original shortage=11; remaining quantity_to_purchase=11
+Synthetic supplier X: capacity=7, quantity_priced=7, unit_price_cents=100, delivery=2026-11-01
+Synthetic supplier Y: capacity=4, quantity_priced=4, unit_price_cents=120, delivery=2026-11-01
+Recommendation (no purchase created): Recommendation(feasible=True, allocations=(Allocation(quote_id='quote-X', quantity=7, total_cents=700), Allocation(quote_id='quote-Y', quantity=4, total_cents=480)), total_cents=1180, explanations=('Recommend 7 units from X using quote quote-X, cost 700 cents USD; delivery 2026-11-01 <= deadline 2026-11-01; synthetic estimate, not a supplier commitment.', 'Recommend 4 units from Y using quote quote-Y, cost 480 cents USD; delivery 2026-11-01 <= deadline 2026-11-01; synthetic estimate, not a supplier commitment.', 'Combined cost 1180 cents USD <= budget 2000 cents covers 11 units of purchased shortage. Explicit owner approval is required.'))
+Explicit owner approval: quantities=[7, 4], combined_cost_cents=1180, line_purchase_budget_cents=2000
+After approval (stock unchanged): on_hand=6, reserved=6, available=0
+After receiving X's 7: on_hand=13, reserved=13, available=0
+Fulfillment after first receipt: rejected (All lines must be fully reserved before fulfillment)
+After receiving Y's 4: on_hand=17, reserved=17, available=0
+After fulfilling all 15: on_hand=2, reserved=2, available=0
+Same-key receipt and fulfillment replays: original results returned
+Receipt repeated with a different key: rejected (PO has already been received)
+Fulfillment repeated with a different key: rejected (Order is already fulfilled)
+Company B reads Company A's order: rejected (Order is absent from this company)
+Company B receives Company A's purchase: rejected (PO is absent from this company)
+Company B fulfills Company A's order: rejected (Order is absent from this company)
+After all repeated and cross-company operations: on_hand=2, reserved=2, available=0
+Demo assertions passed. Database persistence and application integration remain unimplemented.
+
+Exit status: 0
