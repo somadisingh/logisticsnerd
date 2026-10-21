@@ -126,6 +126,9 @@ class DemoSession:
 
     def _compare(self, _key):
         line = self.rules.get_line("A", LINE_ID)
+        if self.repository.read("A", lambda state: any(
+                purchase.line_id == LINE_ID for purchase in state.purchase_orders.values())):
+            raise RuleViolation("Purchases are already approved; the approved supplier plan is fixed")
         if line.original_shortage is None:
             raise RuleViolation("Reserve available stock before comparing suppliers")
         for option in SUPPLIER_OPTIONS:
@@ -150,7 +153,7 @@ class DemoSession:
             approval_id=APPROVAL_ID, key=key,
         )
         quantity = sum(po.quantity for po in purchases)
-        return "Purchases explicitly approved", f"Demo owner {OWNER_ID} approved {quantity} units. Approval did not change on-hand stock."
+        return "Purchases explicitly approved", f"Company A demo owner approved {quantity} units. Approval did not change on-hand stock."
 
     def _receive(self, supplier, key):
         index = {"X": 1, "Y": 2}[supplier]

@@ -41,7 +41,7 @@ function supplierName(id: string): string {
 app.innerHTML = `
   <header class="header">
     <a class="brand" href="/" aria-label="LogisticsNerd home">${brandMark}<span>logistics<span class="brand-light">nerd</span><span class="brand-dot">.</span></span></a>
-    <div class="header-center"><span class="header-divider"></span>Small business. Better buying.</div>
+    <div class="header-center"><span class="header-divider"></span><a href="/">Order workflow demo</a></div>
     <div class="header-actions"><span class="demo-badge"><span></span>Interactive demo</span><button type="button" class="reset-button" id="reset">${icon('reset')}<span>Start again</span></button></div>
   </header>
   <main class="page">

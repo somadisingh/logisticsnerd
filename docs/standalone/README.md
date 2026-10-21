@@ -1,6 +1,6 @@
 # Standalone LogisticsNerd rules
 
-The Python rules implement the requested workflow **in memory**, using synthetic suppliers. They import no OperationsNerd, HTTP, LLM, Redis or external library. No persistent adapter, migration, backend endpoint, UI connection, authentication integration, supplier commitment or accounting integration has been implemented. The existing TypeScript comparison demo/cache remains unchanged.
+The Python rules implement the requested workflow **in memory**, using synthetic suppliers. They import no OperationsNerd, HTTP, LLM, Redis or external library. A separately authorized [local browser demo](frontend-demo.md) now uses those rules through a Vite/Python bridge. No persistent adapter, migration, OperationsNerd backend/UI connection, authentication integration, supplier commitment or accounting integration has been implemented. The existing TypeScript comparison logic/cache remains unchanged and its page is available at `/supplier-comparison.html`.
 
 From the LogisticsNerd repository root, using Python 3.11+ (executed here on 3.14.7):
 

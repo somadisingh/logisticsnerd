@@ -90,6 +90,24 @@ class DemoSessionTests(unittest.TestCase):
         self.assertFalse(self.session.run({"action": "fulfill"})["ok"])
         self.assertEqual(self.action("receive_x")["order"]["status"], "ready")
 
+    def test_stale_compare_cannot_replace_the_approved_plan(self):
+        approved = self.ready_to_receive()
+        for completed in (False, True):
+            if completed:
+                self.action("receive_x")
+                self.action("receive_y")
+                before = self.action("fulfill")
+            else:
+                before = approved
+            rejected = self.session.run({"action": "compare"})
+            self.assertFalse(rejected["ok"])
+            self.assertIn("approved supplier plan is fixed", rejected["error"])
+            after = rejected["snapshot"]
+            self.assertEqual(after["recommendation"], approved["recommendation"])
+            self.assertEqual(after["recommendation"]["total_cents"], 1180)
+            for field in ("stock", "order", "lines", "purchases", "quotes"):
+                self.assertEqual(after[field], before[field])
+
     def test_same_keys_replay_but_new_keys_reject_completed_business_events(self):
         self.ready_to_receive()
         first = self.action("receive_x", key="custom-receipt-key")

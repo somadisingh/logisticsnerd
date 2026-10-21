@@ -1,0 +1,82 @@
+{
+  "browser": "Microsoft Edge 155",
+  "date": "2026-10-21",
+  "smoke": {
+    "checks": [
+      "reset: accepted",
+      "Desktop initial: no horizontal overflow",
+      "create_order: accepted",
+      "reserve: accepted",
+      "compare: accepted",
+      "approve: accepted",
+      "receive_x: accepted",
+      "fulfill: rejected as expected",
+      "receive_y: accepted",
+      "fulfill: accepted",
+      "replay: accepted",
+      "check_isolation: accepted",
+      "Desktop complete: no horizontal overflow",
+      "Final stock: 2 on hand, both reserved for the other order",
+      "Mobile complete: no horizontal overflow",
+      "reset: accepted",
+      "Mobile initial: no horizontal overflow",
+      "create_order: accepted",
+      "reserve: accepted",
+      "compare: accepted",
+      "Mobile supplier comparison: no horizontal overflow",
+      "approve: accepted",
+      "receive_x: accepted",
+      "receive_y: accepted",
+      "fulfill: accepted",
+      "Mobile: full workflow completed through visible controls",
+      "Legacy comparison desktop: no horizontal overflow",
+      "Legacy comparison: sample request and recommendation still work",
+      "No page errors, console errors, external requests, or generated-estimate calls"
+    ],
+    "errors": []
+  },
+  "focused": {
+    "checks": [
+      "Two tabs: stale compare rejected; approved terms, recommendation, and stock unchanged",
+      {
+        "check": "Desktop early fulfillment feedback visible in viewport",
+        "visible": true,
+        "feedback": {
+          "x": 108,
+          "y": 15.9375,
+          "width": 1224,
+          "height": 50.390625
+        },
+        "viewport": {
+          "width": 1440,
+          "height": 1100
+        },
+        "before": {
+          "x": 865.34375,
+          "y": 1144.046875,
+          "width": 111.65625,
+          "height": 45
+        }
+      },
+      "Mobile disclosure visible in first viewport; scenario spacing fixed; no horizontal overflow",
+      {
+        "check": "Mobile early fulfillment feedback visible in viewport",
+        "visible": true,
+        "feedback": {
+          "x": 16,
+          "y": 16.0625,
+          "width": 358,
+          "height": 50.390625
+        }
+      },
+      "Demo reset to prepared scenario: 6 on hand, 2 reserved, 4 available, no customer order"
+    ],
+    "errors": []
+  },
+  "final_reset": {
+    "on_hand": 6,
+    "reserved": 2,
+    "available": 4,
+    "order": null
+  }
+}

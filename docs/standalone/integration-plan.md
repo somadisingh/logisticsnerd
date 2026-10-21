@@ -90,7 +90,7 @@ Migration review must identify which names map to existing authoritative tables 
 5. Connect existing comparison/cache through a typed estimate adapter; preserve the existing demo and cache behavior. Validate synthetic estimates and expired data before purchase approval.
 6. Demonstrate the persistent flow using disposable storage, restart, real API authorization, and concurrent requests before describing it as integrated.
 
-No backend route, app control, migration, persistent repository, core adapter, or external supplier action is implemented by these documents.
+No OperationsNerd backend route, app control, migration, persistent repository, core adapter, or external supplier action is implemented by these documents. The subsequently authorized [local browser demo](frontend-demo.md) is a disposable fixture bridge to the standalone rules; it does not implement this integration plan.
 
 ## Required later integration tests
 

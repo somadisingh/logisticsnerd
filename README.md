@@ -7,7 +7,20 @@ python3 -m unittest discover -s tests_python -v
 python3 -m logistics_rules.demo
 ```
 
-No Python dependencies, API keys or network calls are needed. Supplier data is synthetic. Read the [standalone guide and actual results](docs/standalone/README.md), [verified core/ID mapping](docs/standalone/core-mapping.md), [revised schema proposal](docs/standalone/schema-proposal.md), and [proposed integration contract](docs/standalone/integration-plan.md). Shared-database migrations, item/stock mapping, authentication integration, backend and UI connections remain subject to explicit approval. No OperationsNerd application files were changed.
+No Python dependencies, API keys or external network calls are needed for the rules or order demo. Supplier data is synthetic. Read the [standalone guide and actual results](docs/standalone/README.md), [verified core/ID mapping](docs/standalone/core-mapping.md), [revised schema proposal](docs/standalone/schema-proposal.md), and [proposed integration contract](docs/standalone/integration-plan.md). Shared-database migrations, item/stock mapping, authentication integration and OperationsNerd backend/UI connections remain subject to explicit approval. No OperationsNerd application files were changed.
+
+## Order workflow demo
+
+Use Python 3.11+ and a supported Node.js version from `package.json`:
+
+```sh
+npm ci
+npm run dev
+```
+
+Open `http://127.0.0.1:5173/` (or the local address Vite prints). The frontend uses the existing main-branch styling and runs the actual Python rules through a local, in-memory demo process. No API keys are needed. Click **Create order → Reserve available stock → Compare suppliers → Approve both purchases → Receive 7 units → Receive 4 units → Fulfill order**. Try fulfillment after only the first receipt to show rejection, then use the replay and company-isolation checks. Final stock is 2, still reserved for the other order.
+
+**Reset demo** restores the fixtures. Browser reloads keep the current local session; restarting the server clears it. The original comparison demo is available at `/supplier-comparison.html`. See the [browser demo guide](docs/standalone/frontend-demo.md) for scope, setup and verification.
 
 The existing supplier-selection demo below remains available for small businesses comparing ordinary goods, such as office supplies, packaging, and inventory.
 

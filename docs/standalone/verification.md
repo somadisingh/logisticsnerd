@@ -1,5 +1,7 @@
 # Executed verification and baseline
 
+This records the first standalone review, before the later authorized local browser demo. For current frontend files, tests and scope, see [frontend-demo.md](frontend-demo.md). The earlier test outputs below remain preserved.
+
 Executed 21 October 2026. These results establish the standalone in-memory implementation and existing demo regressions only. They do not establish persistent end-to-end integration, deployed authentication, database isolation or database concurrency safety.
 
 ## Repository baseline and preservation
