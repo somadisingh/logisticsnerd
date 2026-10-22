@@ -194,3 +194,28 @@
 @media (prefers-reduced-motion: reduce) {
   .workflow-meter > span { transition: none; }
 }
+
+.workflow-source-picker { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 21px; margin-bottom: 20px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); }
+.workflow-source-picker strong { font-size: 13px; font-weight: 550; }
+.workflow-source-picker p { font-size: 11px; color: #6c7868; line-height: 1.6; margin: 5px 0 0; }
+.workflow-source-picker > small { flex-basis: 100%; font-size: 10px; color: #75816b; line-height: 1.6; }
+.workflow-source-buttons { display: flex; gap: 8px; }
+.workflow-source-buttons .button { font-size: 11px; padding: 10px 13px; min-height: 37px; }
+.workflow-source-buttons .button:disabled { color: #f2f5e9; background: var(--green); }
+.workflow-budget-field { display: grid; gap: 7px; padding: 0 30px 20px; }
+.workflow-budget-field label { font-size: 11px; color: #5c6c55; }
+.workflow-budget-field input { border: 1px solid #d8dfce; border-radius: 7px; padding: 10px 12px; background: #fffefa; width: 170px; max-width: 100%; color: var(--ink); }
+.workflow-budget-field small { color: #7b8772; font-size: 10px; line-height: 1.6; }
+.workflow-provenance, .workflow-explanations, .workflow-no-plan { margin: 17px 30px 0; font-size: 11px; line-height: 1.7; color: #66775a; }
+.workflow-provenance { padding: 13px; background: #f2f5e9; border-radius: 8px; overflow-wrap: anywhere; }
+.workflow-provenance strong, .workflow-provenance span { display: block; }
+.workflow-provenance span { font-size: 10px; margin-top: 4px; }
+.workflow-explanations summary { cursor: pointer; }
+.workflow-explanations ul { padding-left: 19px; }
+.workflow-no-plan { padding: 14px; background: #fcf3e8; border: 1px solid #ebd4b4; border-radius: 8px; color: #8a562b; }
+.workflow-no-plan p { margin: 5px 0 0; }
+@media (max-width: 620px) {
+  .workflow-source-buttons { width: 100%; flex-wrap: wrap; }
+  .workflow-budget-field { padding-inline: 19px; }
+  .workflow-provenance, .workflow-explanations, .workflow-no-plan { margin-inline: 19px; }
+}

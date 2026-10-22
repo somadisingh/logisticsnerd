@@ -7,7 +7,7 @@ python3 -m unittest discover -s tests_python -v
 python3 -m logistics_rules.demo
 ```
 
-No Python dependencies, API keys or external network calls are needed for the rules or order demo. Supplier data is synthetic. Read the [standalone guide and actual results](docs/standalone/README.md), [verified core/ID mapping](docs/standalone/core-mapping.md), [revised schema proposal](docs/standalone/schema-proposal.md), and [proposed integration contract](docs/standalone/integration-plan.md). Shared-database migrations, item/stock mapping, authentication integration and OperationsNerd backend/UI connections remain subject to explicit approval. No OperationsNerd application files were changed.
+The standalone rules and prepared order demo need no Python dependencies, API keys or external calls. The workflow also offers Baseten AI estimates using the existing server key and Redis cache; estimates remain hypothetical. Read the [standalone guide and actual results](docs/standalone/README.md), [verified core/ID mapping](docs/standalone/core-mapping.md), [revised schema proposal](docs/standalone/schema-proposal.md), and [proposed integration contract](docs/standalone/integration-plan.md). Shared-database migrations, item/stock mapping, authentication integration and OperationsNerd backend/UI connections remain subject to explicit approval. No OperationsNerd application files were changed.
 
 ## Order workflow demo
 
@@ -18,7 +18,9 @@ npm ci
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173/` (or the local address Vite prints). The frontend uses the existing main-branch styling and runs the actual Python rules through a local, in-memory demo process. No API keys are needed. Click **Create order → Reserve available stock → Compare suppliers → Approve both purchases → Receive 7 units → Receive 4 units → Fulfill order**. Try fulfillment after only the first receipt to show rejection, then use the replay and company-isolation checks. Final stock is 2, still reserved for the other order.
+Open `http://127.0.0.1:5173/` (or the local address Vite prints). The frontend uses the existing main-branch styling and runs the actual Python rules through a local, in-memory demo process. The prepared sample needs no API keys. Click **Create order → Reserve available stock → Compare suppliers → Approve both purchases → Receive 7 units → Receive 4 units → Fulfill order**. Try fulfillment after only the first receipt to show rejection, then use the replay and company-isolation checks. Final stock is 2, still reserved for the other order.
+
+**AI estimates · Baseten** uses three fictional suppliers and explicit unit-price estimates for the remaining shortage. Set the purchase budget before creating the order, reserve stock, then click **Generate AI estimates**. Model/version, generation time, expiry and fresh/cache status appear with the result. Python may reject offers that miss the deadline, capacity or budget; a recommendation never creates a purchase. See the [AI workflow verification](docs/standalone/baseten-workflow.md).
 
 **Reset demo** restores the fixtures. Browser reloads keep the current local session; restarting the server clears it. The original comparison demo is available at `/supplier-comparison.html`. See the [browser demo guide](docs/standalone/frontend-demo.md) for scope, setup and verification.
 

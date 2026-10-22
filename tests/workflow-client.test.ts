@@ -94,3 +94,22 @@ describe('workflow demo client', () => {
     await assertion;
   });
 });
+
+describe('AI workflow client', () => {
+  it('accepts empty AI supplier previews and forwards explicit budget and receipt choices', async () => {
+    const value: Snapshot = { ...snapshot(), source: 'ai', supplier_data: 'ai_estimate', estimate_provenance: null,
+      suppliers: ['X', 'Y', 'Z'].map(id => ({ id, name: `Supplier ${id}`, capacity_quantity: null, quantity_priced: null, unit_price_cents: null, expected_date: null })) };
+    const fetcher = vi.fn(async () => new Response(JSON.stringify({ ok: true, snapshot: value })));
+    vi.stubGlobal('fetch', fetcher);
+    await expect(getSnapshot()).resolves.toEqual(value);
+    await sendAction('create_order', undefined, { budget_cents: 15000 });
+    await sendAction('receive', undefined, { supplier_id: 'Z' });
+    expect(JSON.parse(String((fetcher.mock.calls[1] as unknown as [string, RequestInit])[1].body))).toEqual({ action: 'create_order', budget_cents: 15000 });
+    expect(JSON.parse(String((fetcher.mock.calls[2] as unknown as [string, RequestInit])[1].body))).toEqual({ action: 'receive', supplier_id: 'Z' });
+  });
+
+  it('rejects malformed provenance before displaying AI terms', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({ ok: true, snapshot: { ...snapshot(), estimate_provenance: { kind: 'ai_estimate' } } })));
+    await expect(getSnapshot()).rejects.toMatchObject({ code: 'invalid_response' });
+  });
+});

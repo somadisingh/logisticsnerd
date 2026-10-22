@@ -1,5 +1,7 @@
 # Browser demo verification
 
+This records the prepared-only browser demo before Baseten was added to the workflow. Current AI integration results and live/cache checks are in [baseten-workflow.md](baseten-workflow.md).
+
 Executed 21 October 2026 on branch `feature/standalone-workflow-rules`. The browser uses the existing main-branch frontend styling and the real standalone Python rules through a local fixture process. This verifies the disposable demo, not persistent OperationsNerd integration.
 
 | Check | Actual result |

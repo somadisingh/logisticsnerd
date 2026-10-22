@@ -1,5 +1,6 @@
 export type WorkflowAction = 'create_order' | 'reserve' | 'compare' | 'approve'
-  | 'receive_x' | 'receive_y' | 'fulfill' | 'replay' | 'check_isolation' | 'reset';
+  | 'receive_x' | 'receive_y' | 'receive' | 'fulfill' | 'replay' | 'check_isolation' | 'reset'
+  | 'use_ai' | 'use_sample' | 'compare_ai';
 
 interface Quote {
   id: string;
@@ -20,16 +21,19 @@ interface Quote {
 
 export interface Snapshot {
   mode: 'in_memory';
-  supplier_data: 'synthetic';
+  supplier_data: 'synthetic' | 'ai_estimate';
+  source?: 'sample' | 'ai';
+  estimate_provenance?: { kind: 'ai_estimate'; model: string; generatedAt: string; expiresAt: string; cached: boolean } | null;
+  assumptions?: string[];
   company: { id: string; name: string; currency: string; owner_id: string };
   scenario: { quantity: number };
   suppliers: Array<{
     id: string;
     name: string;
-    capacity_quantity: number;
-    quantity_priced: number;
-    unit_price_cents: number;
-    expected_date: string;
+    capacity_quantity: number | null;
+    quantity_priced: number | null;
+    unit_price_cents: number | null;
+    expected_date: string | null;
   }>;
   clock: string;
   deadline: string;
@@ -127,14 +131,21 @@ function message(value: unknown): string | undefined {
 }
 
 function validSnapshot(value: unknown): value is Snapshot {
-  if (!object(value) || value.mode !== 'in_memory' || value.supplier_data !== 'synthetic') return false;
+  if (!object(value) || value.mode !== 'in_memory' || !['synthetic', 'ai_estimate'].includes(String(value.supplier_data))) return false;
+  if (value.source !== undefined && !['sample', 'ai'].includes(String(value.source))) return false;
+  if (value.estimate_provenance != null) {
+    const provenance = value.estimate_provenance;
+    if (!object(provenance) || provenance.kind !== 'ai_estimate' || !nonempty(provenance.model)
+      || typeof provenance.cached !== 'boolean' || !nonempty(provenance.generatedAt) || !Number.isFinite(Date.parse(provenance.generatedAt))
+      || !nonempty(provenance.expiresAt) || !Number.isFinite(Date.parse(provenance.expiresAt))) return false;
+  }
   const { company, item, stock } = value;
   if (!object(company) || !['id', 'name', 'currency', 'owner_id'].every((key) => nonempty(company[key]))) return false;
   if (!object(value.scenario) || !quantity(value.scenario.quantity) || value.scenario.quantity === 0) return false;
   if (!Array.isArray(value.suppliers) || !value.suppliers.every((supplier: unknown) => object(supplier)
-    && nonempty(supplier.id) && nonempty(supplier.name) && quantity(supplier.capacity_quantity)
-    && quantity(supplier.quantity_priced) && supplier.quantity_priced > 0
-    && quantity(supplier.unit_price_cents) && nonempty(supplier.expected_date))) return false;
+    && nonempty(supplier.id) && nonempty(supplier.name) && (supplier.capacity_quantity === null || quantity(supplier.capacity_quantity))
+    && (supplier.quantity_priced === null || quantity(supplier.quantity_priced) && supplier.quantity_priced > 0)
+    && (supplier.unit_price_cents === null || quantity(supplier.unit_price_cents)) && (supplier.expected_date === null || nonempty(supplier.expected_date)))) return false;
   if (!object(item) || !['id', 'name', 'sku'].every((key) => nonempty(item[key]))) return false;
   if (!object(stock) || !['on_hand', 'reserved', 'available'].every((key) => quantity(stock[key]))) return false;
   if (!object(value.other_order) || !nonempty(value.other_order.id) || !quantity(value.other_order.reserved_quantity)) return false;
@@ -145,10 +156,10 @@ function validSnapshot(value: unknown): value is Snapshot {
   return ['lines', 'quotes', 'purchases', 'events'].every((key) => Array.isArray(value[key]) && value[key].every(object));
 }
 
-async function request(init: RequestInit): Promise<WorkflowResponse> {
+async function request(init: RequestInit, timeoutMs = TIMEOUT_MS): Promise<WorkflowResponse> {
   const controller = new AbortController();
   let timedOut = false;
-  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, TIMEOUT_MS);
+  const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
   try {
     const response = await fetch(ENDPOINT, {
       ...init, cache: 'no-store', credentials: 'same-origin', signal: controller.signal,
@@ -186,9 +197,9 @@ export async function getSnapshot(): Promise<Snapshot> {
   return response.snapshot;
 }
 
-export async function sendAction(action: WorkflowAction, key?: string): Promise<WorkflowResponse> {
+export async function sendAction(action: WorkflowAction, key?: string, data: { budget_cents?: number; supplier_id?: string } = {}): Promise<WorkflowResponse> {
   return request({
     method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-    body: JSON.stringify({ action, ...(key === undefined ? {} : { key }) }),
-  });
+    body: JSON.stringify({ action, ...(key === undefined ? {} : { key }), ...data }),
+  }, action === 'compare_ai' ? 105000 : TIMEOUT_MS);
 }

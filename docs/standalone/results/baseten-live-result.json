@@ -1,0 +1,76 @@
+{
+  "status": 200,
+  "ok": true,
+  "provenance": {
+    "kind": "ai_estimate",
+    "model": "deepseek-ai/DeepSeek-V4.1-Flash",
+    "generatedAt": "2026-10-22T00:21:55.307Z",
+    "expiresAt": "2026-10-29T00:21:55.307Z",
+    "cached": false
+  },
+  "recommendation": {
+    "feasible": false,
+    "allocations": [],
+    "total_cents": 0,
+    "explanations": [
+      "Quote ai-quote-X delivery 2026-11-05 is after deadline 2026-11-01.",
+      "Quote ai-quote-Y delivery 2026-11-12 is after deadline 2026-11-01.",
+      "Cheapest combined purchase cost 21890 cents USD exceeds purchased-shortage budget 15000 cents by 6890 cents."
+    ]
+  },
+  "quotes": [
+    {
+      "id": "ai-quote-X",
+      "business_id": "A",
+      "line_id": "customer-order:1",
+      "supplier_id": "X",
+      "capacity_quantity": 25,
+      "quantity_priced": 11,
+      "price_cents": 1850,
+      "pricing_kind": "unit",
+      "currency": "USD",
+      "source": "ai_estimate",
+      "generated_at": "2026-10-22T00:21:55.307000+00:00",
+      "expires_at": "2026-10-29T00:21:55.307000+00:00",
+      "expected_date": "2026-11-05",
+      "estimated": true
+    },
+    {
+      "id": "ai-quote-Y",
+      "business_id": "A",
+      "line_id": "customer-order:1",
+      "supplier_id": "Y",
+      "capacity_quantity": 40,
+      "quantity_priced": 11,
+      "price_cents": 1725,
+      "pricing_kind": "unit",
+      "currency": "USD",
+      "source": "ai_estimate",
+      "generated_at": "2026-10-22T00:21:55.307000+00:00",
+      "expires_at": "2026-10-29T00:21:55.307000+00:00",
+      "expected_date": "2026-11-12",
+      "estimated": true
+    },
+    {
+      "id": "ai-quote-Z",
+      "business_id": "A",
+      "line_id": "customer-order:1",
+      "supplier_id": "Z",
+      "capacity_quantity": 15,
+      "quantity_priced": 11,
+      "price_cents": 1990,
+      "pricing_kind": "unit",
+      "currency": "USD",
+      "source": "ai_estimate",
+      "generated_at": "2026-10-22T00:21:55.307000+00:00",
+      "expires_at": "2026-10-29T00:21:55.307000+00:00",
+      "expected_date": "2026-10-29",
+      "estimated": true
+    }
+  ],
+  "stock": {
+    "on_hand": 6,
+    "reserved": 6,
+    "available": 0
+  }
+}
