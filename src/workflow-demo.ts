@@ -2,6 +2,7 @@ import '@fontsource-variable/dm-sans';
 import './styles.css';
 import './workflow-demo.css';
 import { brandMark, icon } from './icons';
+import { demoNavigation } from './demo-navigation';
 import { estimateStatus } from './estimates-client';
 import { parseMoney } from './domain/validate';
 import { dateLabel, money } from './domain/reasons';
@@ -23,9 +24,9 @@ function button(action: WorkflowAction, label: string, options: { disabled?: boo
 }
 
 function header(): string {
-  return `<header class="header workflow-header">
+  return `<header class="header demo-header">
     <a class="brand" href="/" aria-label="LogisticsNerd home">${brandMark}<span>logistics<span class="brand-light">nerd</span><span class="brand-dot">.</span></span></a>
-    <nav class="workflow-nav" aria-label="Demos"><a href="/" aria-current="page">Order workflow</a><a href="/supplier-comparison.html">Supplier comparison</a></nav>
+    ${demoNavigation('workflow')}
     <button type="button" class="reset-button" data-action="reset" ${busy ? 'disabled' : ''}>${icon('reset')}Reset demo</button>
   </header>`;
 }

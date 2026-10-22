@@ -6,6 +6,7 @@ import { dateLabel, deliveryGapDays, evaluationReason, money } from './domain/re
 import type { ComparisonResult, DraftErrors, Evaluation, ProcurementRequest, PurchasingPreference, RequestDraft, SupplierQuote } from './domain/model';
 import { validateDraft } from './domain/validate';
 import { brandMark, icon } from './icons';
+import { demoNavigation } from './demo-navigation';
 import { EstimateError, estimateStatus, generateEstimates, type EstimateProvenance } from './estimates-client';
 
 type Step = 1 | 2 | 3;
@@ -39,9 +40,9 @@ function supplierName(id: string): string {
 }
 
 app.innerHTML = `
-  <header class="header">
+  <header class="header demo-header">
     <a class="brand" href="/" aria-label="LogisticsNerd home">${brandMark}<span>logistics<span class="brand-light">nerd</span><span class="brand-dot">.</span></span></a>
-    <div class="header-center"><span class="header-divider"></span><a href="/">Order workflow demo</a></div>
+    ${demoNavigation('comparison')}
     <div class="header-actions"><span class="demo-badge"><span></span>Interactive demo</span><button type="button" class="reset-button" id="reset">${icon('reset')}<span>Start again</span></button></div>
   </header>
   <main class="page">
