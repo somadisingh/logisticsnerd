@@ -896,3 +896,42 @@ describe('Redis-backed estimate reuse and generation coordination', () => {
     expect(fetcher).not.toHaveBeenCalled();
   });
 });
+
+describe('workflow unit-price estimates', () => {
+  it('asks for explicit unit prices without changing the legacy total schema', () => {
+    const unit = buildEstimateSchema(['metro', 'comfort', 'budget'], 'unit');
+    expect(unit.properties.quotes.items.required).toContain('unit_cents');
+    expect(unit.properties.quotes.items.properties).not.toHaveProperty('total_cents');
+    expect(buildEstimateSchema(['metro']).properties.quotes.items.required).toContain('total_cents');
+    const trusted = validateEstimateInput(input(), catalog, validateComparisonInput);
+    trusted.pricing = 'unit';
+    expect(buildEstimateMessages(trusted, AS_OF)[0].content).toContain('explicit all-in linear USD price per unit');
+    expect(buildEstimateMessages(trusted, AS_OF)[0].content).toContain('do not return or prorate');
+    const value = output();
+    value.quotes.forEach(q => { q.unit_cents = q.total_cents / 50; delete q.total_cents; });
+    expect(validateModelOutput(value, trusted, AS_OF)).toEqual(value);
+    expect(() => validateModelOutput(output(), trusted, AS_OF)).toThrow('inconsistent');
+  });
+
+  it('keeps unit and total Redis records separate and reuses valid unit estimates', async () => {
+    const redis = sharedRedis(() => Date.parse(`${AS_OF}T12:00:00Z`));
+    const fetcher = vi.fn(async (_url, options) => {
+      const schema = JSON.parse(options.body).response_format.json_schema.schema;
+      const unit = schema.properties.quotes.items.required.includes('unit_cents');
+      const value = output();
+      if (unit) value.quotes.forEach(q => { q.unit_cents = q.total_cents / 50; delete q.total_cents; });
+      return new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(value) } }] }));
+    });
+    const options = { env: fakeEnv, fetcher, rules, catalog, now: () => new Date(`${AS_OF}T12:00:00Z`), persistentCache: redis };
+    const total = await createEstimateRunner(options)(input());
+    const runUnit = createEstimateRunner({ ...options, pricing: 'unit' });
+    const unit = await runUnit(input());
+    const cached = await createEstimateRunner({ ...options, pricing: 'unit' })(input());
+    expect(total.quotes[0].items[0].price).toEqual({ kind: 'total', cents: 450000 });
+    expect(unit.quotes[0].items[0].price).toEqual({ kind: 'unit', cents: 9000 });
+    expect(cached.provenance.cached).toBe(true);
+    expect(unit.provenance.cacheVersion).not.toBe(total.provenance.cacheVersion);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(redis.values.size).toBe(2);
+  });
+});

@@ -7,6 +7,7 @@ const endpoint = '/api/demo/workflow';
 const actions = new Set([
   'create_order', 'reserve', 'compare', 'approve', 'receive_x', 'receive_y',
   'fulfill', 'replay', 'check_isolation', 'reset',
+  'use_ai', 'use_sample', 'compare_ai', 'receive',
 ]);
 
 function unavailable(message = 'The local Python demo is unavailable. Restart the demo server to restore the fixtures.') {
@@ -94,11 +95,38 @@ export function workflowDemoMiddleware(options = {}) {
   let worker;
   let closed = false;
   let queue = Promise.resolve();
+  let estimates;
   const run = (command, signal) => {
-    const result = queue.then(() => {
+    const result = queue.then(async () => {
       if (closed) throw unavailable();
       if (signal.aborted) throw Object.assign(new Error('Demo request cancelled.'), { status: 499, code: 'request_cancelled' });
       worker ||= factory();
+      if (command.action === 'compare_ai') {
+        const prepared = await worker.request({ action: 'prepare_ai' }, { signal });
+        if (!prepared.ok || prepared.snapshot.recommendation) return prepared;
+        if (!options.estimatesFactory) throw unavailable('AI estimates are not configured on this demo server.');
+        const state = prepared.snapshot;
+        const suppliers = state.suppliers.map(({ id, name }) => ({ id, name }));
+        estimates ||= options.estimatesFactory(suppliers);
+        const needed = state.lines[0].shortage.quantity_to_purchase;
+        const response = await estimates.run({
+          request: {
+            id: state.order.id, buyerId: 'company-A-demo', createdAt: state.order.created_at,
+            maxBudgetCents: state.budget_cents, selectedSupplierIds: suppliers.map(s => s.id),
+            items: [{ id: state.lines[0].id, name: state.item.name, quantity: needed, requiredDate: state.deadline, unitLabel: 'filters' }],
+          }, suppliers, preference: 'lowest_cost',
+        }, { signal });
+        if (signal.aborted) throw unavailable('Estimate generation was cancelled. Try again.');
+        return worker.request({ action: 'apply_ai', estimates: {
+          provenance: response.provenance, assumptions: response.assumptions,
+          quotes: response.quotes.map(quote => {
+            const offer = quote.items[0];
+            if (offer.price.kind !== 'unit') throw unavailable('AI estimates did not provide explicit unit prices.');
+            return { supplier_id: quote.supplierId, capacity_quantity: offer.availableQuantity,
+              quantity_priced: needed, price_cents: offer.price.cents, currency: 'USD', expected_date: offer.expectedDate };
+          }),
+        } }, { signal });
+      }
       return worker.request(command, { signal });
     });
     queue = result.catch(() => {});
@@ -135,8 +163,10 @@ export function workflowDemoMiddleware(options = {}) {
         try { command = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
         catch { return send(400, { ok: false, error: 'Send a valid JSON demo action.' }); }
         if (!command || typeof command !== 'object' || Array.isArray(command)
-          || Object.keys(command).some(key => !['action', 'key'].includes(key))
+          || Object.keys(command).some(key => !['action', 'key', ...(command.action === 'create_order' ? ['budget_cents'] : command.action === 'receive' ? ['supplier_id'] : [])].includes(key))
           || !actions.has(command.action)
+          || ('budget_cents' in command && (!Number.isSafeInteger(command.budget_cents) || command.budget_cents < 0 || command.budget_cents > 100_000_000))
+          || (command.action === 'receive' && !['X', 'Y', 'Z'].includes(command.supplier_id))
           || ('key' in command && (typeof command.key !== 'string' || !command.key.trim() || command.key.length > 128))) {
           return send(400, { ok: false, error: 'Send a known demo action and an optional operation key of 1 through 128 characters.' });
         }
@@ -152,6 +182,7 @@ export function workflowDemoMiddleware(options = {}) {
   middleware.close = () => {
     closed = true;
     worker?.close();
+    void estimates?.close();
   };
   return middleware;
 }

@@ -216,21 +216,36 @@ class Workflow:
 
     def add_quote(self, business_id: str, quote: Quote, *, key: str) -> Quote:
         def command(state):
-            if quote.business_id != business_id:
-                raise RuleViolation("Quote company differs from context")
-            line = _record(state.lines, quote.line_id, "Line")
-            _unfinished(state, line.order_id)
-            if quote.supplier_id not in state.supplier_ids:
-                raise RuleViolation("Supplier is absent from this company")
-            if quote.currency != state.currency:
-                raise RuleViolation("Mixed currencies are unsupported")
-            if quote.id in state.quotes:
-                raise RuleViolation("Quote is immutable and already exists")
-            if any(q.line_id == quote.line_id and q.supplier_id == quote.supplier_id for q in state.quotes.values()):
-                raise RuleViolation("One immutable quote per supplier and demand in v1; requoting is unsupported")
-            state.quotes[quote.id] = quote
+            self._store_quote(state, business_id, quote)
             return quote
         return self.repository.transact(business_id, key, ("quote", quote), command)
+
+    @staticmethod
+    def _store_quote(state, business_id: str, quote: Quote):
+        if not isinstance(quote, Quote) or quote.business_id != business_id:
+            raise RuleViolation("Quote company differs from context")
+        line = _record(state.lines, quote.line_id, "Line")
+        _unfinished(state, line.order_id)
+        if quote.supplier_id not in state.supplier_ids:
+            raise RuleViolation("Supplier is absent from this company")
+        if quote.currency != state.currency:
+            raise RuleViolation("Mixed currencies are unsupported")
+        if quote.id in state.quotes:
+            raise RuleViolation("Quote is immutable and already exists")
+        if any(q.line_id == quote.line_id and q.supplier_id == quote.supplier_id for q in state.quotes.values()):
+            raise RuleViolation("One immutable quote per supplier and demand in v1; requoting is unsupported")
+        state.quotes[quote.id] = quote
+
+    def add_quotes(self, business_id: str, quotes: tuple[Quote, ...], *, key: str) -> tuple[Quote, ...]:
+        """Accept one validated estimate batch atomically, including replay state."""
+        quotes = tuple(quotes)
+        def command(state):
+            if not quotes:
+                raise RuleViolation("A quote batch cannot be empty")
+            for quote in quotes:
+                self._store_quote(state, business_id, quote)
+            return quotes
+        return self.repository.transact(business_id, key, ("quotes", quotes), command)
 
     def recommend(self, business_id: str, line_id: str):
         def query(state):

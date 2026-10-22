@@ -156,3 +156,82 @@ describe('actual Python worker, synthetic fixtures only', () => {
     }
   });
 });
+
+describe('Baseten workflow bridge', () => {
+  function aiSetup(run) {
+    const state = {
+      source: 'ai', order: { id: 'customer-order', created_at: '2026-10-21T12:00:00Z' },
+      item: { name: 'Industrial filter' }, deadline: '2026-11-01', budget_cents: 2000,
+      suppliers: ['X', 'Y', 'Z'].map(id => ({ id, name: `Supplier ${id}` })),
+      lines: [{ id: 'customer-order:1', shortage: { quantity_to_purchase: 11 } }], recommendation: null,
+    };
+    const worker = { request: vi.fn(async command => command.action === 'prepare_ai'
+      ? { ok: true, snapshot: state } : { ok: true, snapshot: { ...state, applied: command.estimates } }), close: vi.fn() };
+    const service = { run: vi.fn(run), close: vi.fn() };
+    const estimatesFactory = vi.fn(() => service);
+    return { middleware: workflowDemoMiddleware({ workerFactory: () => worker, estimatesFactory }), worker, service, estimatesFactory, state };
+  }
+
+  function estimates() {
+    return {
+      provenance: { kind: 'ai_estimate', model: 'test-model', generatedAt: '2026-10-21T12:00:00Z', expiresAt: '2026-10-28T12:00:00Z', cached: true },
+      assumptions: ['All-in linear unit prices; hypothetical suppliers.'],
+      quotes: ['X', 'Y', 'Z'].map((id, index) => ({ supplierId: id, items: [{ availableQuantity: [7, 4, 0][index], price: { kind: 'unit', cents: 100 }, expectedDate: '2026-10-25' }] })),
+    };
+  }
+
+  it('constructs the shortage request on the server and forwards price basis and provenance', async () => {
+    const { middleware, worker, service, estimatesFactory } = aiSetup(async () => estimates());
+    const response = await request(middleware, { body: { action: 'compare_ai' } });
+    expect(response.status).toBe(200);
+    expect(estimatesFactory).toHaveBeenCalledWith(['X', 'Y', 'Z'].map(id => ({ id, name: `Supplier ${id}` })));
+    expect(service.run.mock.calls[0][0].request.items[0]).toMatchObject({ quantity: 11, name: 'Industrial filter' });
+    expect(worker.request.mock.calls[1][0]).toMatchObject({ action: 'apply_ai', estimates: {
+      provenance: { cached: true, model: 'test-model' }, quotes: [{ supplier_id: 'X', quantity_priced: 11, capacity_quantity: 7, price_cents: 100, currency: 'USD' }, expect.anything(), expect.anything()],
+    } });
+    expect(worker.request.mock.calls.every(([value]) => value.action !== 'approve')).toBe(true);
+    middleware.close();
+    expect(service.close).toHaveBeenCalledOnce();
+  });
+
+  it('never requests a model when Python rejects the state or a plan already exists', async () => {
+    const { middleware, worker, service } = aiSetup(async () => estimates());
+    worker.request.mockResolvedValue({ ok: false, error: 'Reserve first', snapshot: {} });
+    expect((await request(middleware, { body: { action: 'compare_ai' } })).body.ok).toBe(false);
+    worker.request.mockResolvedValue({ ok: true, snapshot: { recommendation: { feasible: true } } });
+    await request(middleware, { body: { action: 'compare_ai' } });
+    expect(service.run).not.toHaveBeenCalled();
+    middleware.close();
+  });
+
+  it('reports provider failure without substituting sample quotes', async () => {
+    const { middleware, worker } = aiSetup(async () => { throw Object.assign(new Error('Baseten is unavailable'), { status: 503 }); });
+    const response = await request(middleware, { body: { action: 'compare_ai' } });
+    expect(response.status).toBe(503);
+    expect(response.body.error).toBe('Baseten is unavailable');
+    expect(worker.request).toHaveBeenCalledTimes(1);
+    middleware.close();
+  });
+
+  it('rejects total-price lots instead of silently prorating a price', async () => {
+    const value = estimates();
+    value.quotes[0].items[0].price.kind = 'total';
+    const { middleware, worker } = aiSetup(async () => value);
+    expect((await request(middleware, { body: { action: 'compare_ai' } })).status).toBe(503);
+    expect(worker.request).toHaveBeenCalledTimes(1);
+    middleware.close();
+  });
+
+  it.each([
+    { action: 'apply_ai', estimates: {} },
+    { action: 'compare_ai', estimates: {} },
+    { action: 'create_order', budget_cents: true },
+    { action: 'create_order', budget_cents: -1 },
+    { action: 'receive', supplier_id: 'outside-company' },
+  ])('rejects untrusted estimate and command fields: %j', async body => {
+    const { middleware, factory } = fakeMiddleware();
+    expect((await request(middleware, { body })).status).toBe(400);
+    expect(factory).not.toHaveBeenCalled();
+    middleware.close();
+  });
+});

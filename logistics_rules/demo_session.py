@@ -26,6 +26,9 @@ SUPPLIER_OPTIONS = (
     {"id": "Y", "name": "Supplier Y", "capacity_quantity": 4, "quantity_priced": 4,
      "unit_price_cents": 120, "expected_date": DEADLINE},
 )
+AI_SUPPLIERS = tuple({"id": key, "name": f"Supplier {key}", "capacity_quantity": None,
+                      "quantity_priced": None, "unit_price_cents": None, "expected_date": None}
+                     for key in ("X", "Y", "Z"))
 ORDER_ID = "customer-order"
 LINE_ID = f"{ORDER_ID}:1"
 APPROVAL_ID = "demo-owner-approval"
@@ -47,21 +50,26 @@ def _json_value(value):
 class DemoSession:
     """Fixed Company A/B fixtures; callers choose actions, never company/owner IDs."""
 
-    def __init__(self):
+    def __init__(self, clock=None):
+        self.live_clock = clock or (lambda: datetime.now(timezone.utc))
+        self.source = "sample"
         self._reset()
 
     def _reset(self):
+        self.budget = BUDGET
+        self.provenance = None
+        self.assumptions = []
         self.repository = InMemoryRepository()
         self.repository.seed_company(
             "A", currency="USD", item_ids=(ITEM["id"],), customer_ids=("customer",),
-            supplier_ids=tuple(supplier["id"] for supplier in SUPPLIER_OPTIONS),
+            supplier_ids=tuple(supplier["id"] for supplier in AI_SUPPLIERS),
             owner_ids=(OWNER_ID,), stock={ITEM["id"]: 6},
         )
         self.repository.seed_company(
             "B", currency="USD", item_ids=("B-item",), customer_ids=("B-customer",),
             supplier_ids=("B-supplier",), owner_ids=("B-owner",), stock={"B-item": 0},
         )
-        self.rules = Workflow(self.repository, clock=lambda: NOW)
+        self.rules = Workflow(self.repository, clock=lambda: self.live_clock() if self.source == "ai" else NOW)
         self.rules.create_order(
             "A", "other-order", "customer", (LineRequest(ITEM["id"], 2, DEADLINE),),
             key="seed-other-order",
@@ -88,14 +96,23 @@ class DemoSession:
             quotes.append(value)
         return {
             "mode": "in_memory",
-            "supplier_data": "synthetic",
+            "supplier_data": "ai_estimate" if self.source == "ai" else "synthetic",
+            "source": self.source,
+            "estimate_provenance": self.provenance,
+            "assumptions": list(self.assumptions),
             "company": {"id": "A", "name": "Company A", "currency": "USD", "owner_id": OWNER_ID},
-            "clock": NOW.isoformat(),
+            "clock": self.rules._now().isoformat(),
             "deadline": DEADLINE.isoformat(),
-            "budget_cents": BUDGET,
+            "budget_cents": self.budget,
             "scenario": {"quantity": DEMAND},
             "item": _json_value(ITEM),
-            "suppliers": _json_value(SUPPLIER_OPTIONS),
+            "suppliers": _json_value(tuple({**option, **({
+                "capacity_quantity": state.quotes[f"ai-quote-{option['id']}"].capacity_quantity,
+                "quantity_priced": state.quotes[f"ai-quote-{option['id']}"].quantity_priced,
+                "unit_price_cents": state.quotes[f"ai-quote-{option['id']}"].price_cents,
+                "expected_date": state.quotes[f"ai-quote-{option['id']}"].expected_date,
+            } if f"ai-quote-{option['id']}" in state.quotes else {})}
+                for option in (AI_SUPPLIERS if self.source == "ai" else SUPPLIER_OPTIONS))),
             "stock": _json_value(self.rules.stock("A", ITEM["id"])),
             "other_order": {"id": "other-order", "reserved_quantity": state.lines["other-order:1"].reserved_quantity},
             "order": _json_value(order),
@@ -112,25 +129,34 @@ class DemoSession:
             "label": label, "detail": detail, "ok": ok,
         })
 
-    def _create_order(self, key):
+    def _create_order(self, key, budget=None):
+        budget = self.budget if budget is None else budget
+        if type(budget) is not int or not 0 <= budget <= 100_000_000:
+            raise RuleViolation("Purchase budget must be nonnegative integer cents, at most 1,000,000 USD")
         self.rules.create_order(
             "A", ORDER_ID, "customer",
-            (LineRequest(ITEM["id"], DEMAND, DEADLINE, maximum_budget_cents=BUDGET),), key=key,
+            (LineRequest(ITEM["id"], DEMAND, DEADLINE, maximum_budget_cents=budget),), key=key,
         )
-        return "Customer order created", f"{DEMAND} filters, due {DEADLINE.isoformat()}. Purchase budget: ${BUDGET / 100:.2f} USD."
+        self.budget = budget
+        return "Customer order created", f"{DEMAND} filters, due {DEADLINE.isoformat()}. Purchase budget: ${budget / 100:.2f} USD."
 
     def _reserve(self, key):
         self.rules.reserve("A", ORDER_ID, key=key)
         shortage = self.rules.shortage("A", LINE_ID)
         return "Available stock reserved", f"{shortage.reserved} reserved for this order; {shortage.quantity_to_purchase} units still need purchasing."
 
-    def _compare(self, _key):
+    def _assert_comparable(self, source):
+        if self.source != source:
+            raise RuleViolation("Choose the matching estimate source before comparing")
         line = self.rules.get_line("A", LINE_ID)
         if self.repository.read("A", lambda state: any(
                 purchase.line_id == LINE_ID for purchase in state.purchase_orders.values())):
             raise RuleViolation("Purchases are already approved; the approved supplier plan is fixed")
         if line.original_shortage is None:
             raise RuleViolation("Reserve available stock before comparing suppliers")
+
+    def _compare(self, _key):
+        self._assert_comparable("sample")
         for option in SUPPLIER_OPTIONS:
             supplier = option["id"]
             quote = Quote(
@@ -144,6 +170,43 @@ class DemoSession:
         self.recommendation = self.rules.recommend("A", LINE_ID)
         return "Supplier comparison ready", "Synthetic estimates only. A recommendation creates no purchase orders."
 
+    def _apply_ai(self, estimates):
+        self._assert_comparable("ai")
+        try:
+            provenance = estimates["provenance"]
+            if provenance["kind"] != "ai_estimate" or not isinstance(provenance["cached"], bool):
+                raise ValueError("Invalid estimate provenance")
+            model = provenance["model"]
+            if not isinstance(model, str) or not 0 < len(model) <= 160:
+                raise ValueError("Invalid estimate model")
+            generated = datetime.fromisoformat(provenance["generatedAt"].replace("Z", "+00:00"))
+            expiry = datetime.fromisoformat(provenance["expiresAt"].replace("Z", "+00:00"))
+            assumptions = estimates["assumptions"]
+            if not isinstance(assumptions, list) or len(assumptions) > 12 or any(
+                    not isinstance(item, str) or not 0 < len(item) <= 1000 for item in assumptions):
+                raise ValueError("Invalid estimate assumptions")
+            needed = self.rules.shortage("A", LINE_ID).quantity_to_purchase
+            quotes = tuple(Quote(
+                id=f"ai-quote-{offer['supplier_id']}", business_id="A", line_id=LINE_ID,
+                supplier_id=offer["supplier_id"], capacity_quantity=offer["capacity_quantity"],
+                quantity_priced=offer["quantity_priced"], price_cents=offer["price_cents"],
+                pricing_kind="unit", currency=offer["currency"], source="ai_estimate",
+                generated_at=generated, expires_at=expiry, expected_date=date.fromisoformat(offer["expected_date"]),
+            ) for offer in estimates["quotes"])
+            if len(quotes) != len(AI_SUPPLIERS) or {q.supplier_id for q in quotes} != {s["id"] for s in AI_SUPPLIERS}:
+                raise ValueError("AI estimates must match the selected suppliers")
+            if any(q.quantity_priced != needed or q.currency != "USD" for q in quotes):
+                raise ValueError("AI pricing must cover the current shortage in USD")
+            if generated.utcoffset() is None or expiry.utcoffset() is None or not generated <= self.live_clock() < expiry:
+                raise ValueError("AI estimates have expired or are from the future")
+        except (ValueError, KeyError, TypeError, AttributeError) as error:
+            raise RuleViolation(f"AI estimate validation failed: {error}") from error
+        self.rules.add_quotes("A", quotes, key="demo-ai-quotes")
+        self.recommendation = self.rules.recommend("A", LINE_ID)
+        self.provenance = {key: provenance[key] for key in ("kind", "model", "generatedAt", "expiresAt", "cached")}
+        self.assumptions = list(assumptions)
+        return "AI estimates compared", "Baseten estimates validated by Python rules. No supplier was contacted and no purchase was created."
+
     def _approve(self, key):
         if self.recommendation is None or not self.recommendation.feasible or not self.recommendation.allocations:
             raise RuleViolation("Compare suppliers and select a feasible plan before approval")
@@ -156,8 +219,10 @@ class DemoSession:
         return "Purchases explicitly approved", f"Company A demo owner approved {quantity} units. Approval did not change on-hand stock."
 
     def _receive(self, supplier, key):
-        index = {"X": 1, "Y": 2}[supplier]
-        po_id = f"{APPROVAL_ID}:{index}"
+        matches = self.repository.read("A", lambda state: [p.id for p in state.purchase_orders.values() if p.supplier_id == supplier])
+        if len(matches) != 1:
+            raise RuleViolation("No approved purchase exists for this supplier")
+        po_id = matches[0]
         purchase = self.rules.receive("A", po_id, key=key)
         self.receipt_keys.setdefault(po_id, key)
         return f"Supplier {supplier} received", f"Received all {purchase.quantity} units and reserved them for the customer order."
@@ -174,8 +239,9 @@ class DemoSession:
 
     def _replay(self, _key):
         order = self.rules.get_order("A", ORDER_ID)
-        if order.status != "fulfilled" or len(self.receipt_keys) != 2 or self.fulfillment_key is None:
-            raise RuleViolation("Receive both purchases and fulfill the order before checking replays")
+        count = self.repository.read("A", lambda state: len(state.purchase_orders))
+        if order.status != "fulfilled" or not count or len(self.receipt_keys) != count or self.fulfillment_key is None:
+            raise RuleViolation("Receive every purchase and fulfill the order before checking replays")
         before = self._balances()
         for po_id, key in self.receipt_keys.items():
             self.rules.receive("A", po_id, key=key)
@@ -213,26 +279,37 @@ class DemoSession:
     def run(self, request):
         action = request.get("action") if isinstance(request, dict) else None
         try:
-            if not isinstance(request, dict) or set(request) - {"action", "key"}:
+            fields = {"action", "key"} | ({"estimates"} if action == "apply_ai" else {"budget_cents"} if action == "create_order" else {"supplier_id"} if action == "receive" else set())
+            if not isinstance(request, dict) or set(request) - fields:
                 raise RuleViolation("Send only a demo action and an optional operation key")
             if not isinstance(action, str):
                 raise RuleViolation("A demo action is required")
-            key = request.get("key", f"demo-{action}")
+            default_key = f"demo-receive-{request.get('supplier_id')}" if action == "receive" else f"demo-{action}"
+            key = request.get("key", default_key)
             if not isinstance(key, str) or not key.strip() or len(key) > 128:
                 raise RuleViolation("Operation key must contain 1 through 128 characters")
             if action == "snapshot":
                 return {"ok": True, "snapshot": self.snapshot()}
+            if action == "prepare_ai":
+                self._assert_comparable("ai")
+                return {"ok": True, "snapshot": self.snapshot()}
             if action == "reset":
                 self._reset()
                 label, detail = "Demo reset", "In-memory fixtures restored: 6 on hand, 2 reserved for another order."
+            elif action in ("use_ai", "use_sample"):
+                self.source = "ai" if action == "use_ai" else "sample"
+                self._reset()
+                label, detail = "Estimate source selected", f"Demo reset to {'Baseten AI estimates' if self.source == 'ai' else 'prepared sample estimates'}. Stock fixtures restored."
             else:
                 commands = {
-                    "create_order": self._create_order,
+                    "create_order": lambda key: self._create_order(key, request.get("budget_cents")),
                     "reserve": self._reserve,
                     "compare": self._compare,
+                    "apply_ai": lambda _key: self._apply_ai(request.get("estimates")),
                     "approve": self._approve,
                     "receive_x": lambda key: self._receive("X", key),
                     "receive_y": lambda key: self._receive("Y", key),
+                    "receive": lambda key: self._receive(request.get("supplier_id"), key),
                     "fulfill": self._fulfill,
                     "replay": self._replay,
                     "check_isolation": self._check_isolation,
