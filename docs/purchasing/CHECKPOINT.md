@@ -44,6 +44,6 @@ Previous local evidence: 57 PostgreSQL acceptance tests, 10 HTTP tests, 79 exist
 - Confirm authoritative OperationsNerd item/entity/field-role mappings.
 - Replace the owner-development authentication adapter with the agreed production host identity/routing.
 - Define approved PO amendments, automatic multi-demand cost sharing, carrier/label integration, and any real legacy SQLite data import.
-- GitHub push/deployment integration remains separate and has not been configured. Keep one migration authority.
+- Feature branch is pushed to `origin/feature/purchasing-stock-integration`. Automatic Supabase deployment is not configured; pushing source code does not itself connect the GitHub deployment integration. Keep one migration authority.
 
 All implementation stays in LogisticsNerd. OperationsNerd remains a reference. Keep the existing free-tier project and local acceptance databases; no paid branching/PITR or extra hosted projects are required for this development setup.
