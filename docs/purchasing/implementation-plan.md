@@ -1,7 +1,7 @@
 # Purchasing and stock implementation plan
 
 Prepared: 27 October 2026.
-Status: initial purchasing/stock implementation completed locally on 27 October. Supabase connectivity verified; remote migration not yet applied. See CHECKPOINT.md for the exact resume point and actual checks.
+Status: initial purchasing/stock implementation and Supabase development migration completed. Browser verification passed on 28 October. See CHECKPOINT.md and verification-2026-10-28.md for current state; production core mapping remains pending.
 
 ## 1. Workspace and agreed target
 
