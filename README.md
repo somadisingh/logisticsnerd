@@ -2,6 +2,13 @@
 
 The new PostgreSQL purchasing and stock workspace is implemented on `feature/purchasing-stock-integration`. See [setup](docs/purchasing/setup.md), [function inventory](docs/purchasing/function-map.md), and the [implementation checkpoint](docs/purchasing/CHECKPOINT.md). The free-tier Supabase development database is migrated and the purchasing browser flow is verified. See [remote verification](docs/purchasing/verification-2026-10-28.md). The existing in-memory demos below remain available.
 
+The [business workspace](docs/purchasing/business-workspace.md) at `/business.html`
+adds a setup questionnaire, employee and customer-order entry, and generic record
+forms for standard and user-created tables. Relationships use real PostgreSQL
+foreign keys. Submitting an order publishes demand to purchasing; posted stock
+and approved documents retain their controlled commands. OperationsNerd core
+mapping and production host authentication remain pending.
+
 LogisticsNerd is being developed as reusable Python business rules for OperationsNerd. The standalone order → reservation → shortage → supplier recommendation → explicit purchase approval → receiving → fulfillment rules now have an **in-memory repository**, deterministic tests and a runnable demo. This is not a persistent integrated workflow or a separate CRM.
 
 ```sh

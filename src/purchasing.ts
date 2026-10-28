@@ -27,7 +27,7 @@ const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, char 
 const field = (name: string, label: string, type = 'text', extra = '') => `<label>${label}<input name="${name}" type="${type}" required ${extra}></label>`;
 const options = (rows: Row[], label: (row: Row) => string) => rows.map(row => `<option value="${escape(row.id)}">${escape(label(row))}</option>`).join('');
 const select = (name: string, label: string, rows: Row[], format: (row: Row) => string) => `<label>${label}<select name="${name}" required><option value="">Select…</option>${options(rows, format)}</select></label>`;
-const refs = (kind: string) => data?.references.filter(ref => ref.kind === kind && !ref.valid_to) ?? [];
+const refs = (kind: string) => data?.references.filter(ref => ref.kind === kind && !ref.valid_to && !ref.local_archived) ?? [];
 const referenceName = (id: unknown) => {
   const ref = data?.references.find(binding => binding.id === Number(id));
   return String(ref?.snapshot?.name ?? ref?.snapshot?.label ?? ref?.external_key ?? `#${id}`);

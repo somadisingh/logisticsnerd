@@ -26,8 +26,15 @@ class PostgresCase(unittest.TestCase):
 
     def setUp(self):
         self.conn=connect(self.dsn,'test-business')
-        tables=self.conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='logistics' AND tablename NOT IN ('database_identity','schema_migrations')").fetchall()
         from psycopg import sql
+        # User-created physical tables are schema state, not just fixture rows.
+        # Drop only registered tables inside the validated disposable database.
+        if self.conn.execute("SELECT to_regclass('logistics.record_tables') AS name").fetchone()['name']:
+            registered=self.conn.execute('SELECT slug FROM logistics.record_tables').fetchall()
+            for row in registered:
+                self.conn.execute(sql.SQL('DROP TABLE IF EXISTS {} CASCADE').format(
+                    sql.Identifier('logistics','record_'+row['slug'])))
+        tables=self.conn.execute("SELECT tablename FROM pg_tables WHERE schemaname='logistics' AND tablename NOT IN ('database_identity','schema_migrations')").fetchall()
         if tables:
             self.conn.execute(sql.SQL('TRUNCATE {} RESTART IDENTITY CASCADE').format(
                 sql.SQL(',').join(sql.Identifier('logistics',r['tablename']) for r in tables)))

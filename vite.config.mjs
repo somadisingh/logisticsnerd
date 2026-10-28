@@ -19,8 +19,8 @@ export default defineConfig(({ mode }) => {
     };
   };
   return {
-    server: { proxy: { '/api/purchasing': { target: 'http://127.0.0.1:8001' } } },
-    preview: { proxy: { '/api/purchasing': { target: 'http://127.0.0.1:8001' } } },
+    server: { proxy: { '/api/purchasing': { target: 'http://127.0.0.1:8001' }, '/api/business': { target: 'http://127.0.0.1:8001' } } },
+    preview: { proxy: { '/api/purchasing': { target: 'http://127.0.0.1:8001' }, '/api/business': { target: 'http://127.0.0.1:8001' } } },
     plugins: [{
       name: 'local-shipping-comparison',
       configureServer(server) {
@@ -42,6 +42,6 @@ export default defineConfig(({ mode }) => {
         server.httpServer?.once('close', () => { void procurement.close(); });
       },
     }],
-    build: { rollupOptions: { input: { main: resolve(import.meta.dirname, 'index.html'), comparison: resolve(import.meta.dirname, 'supplier-comparison.html'), shipping: resolve(import.meta.dirname, 'shipping-lab.html'), purchasing: resolve(import.meta.dirname, 'purchasing.html') } } },
+    build: { rollupOptions: { input: { main: resolve(import.meta.dirname, 'index.html'), comparison: resolve(import.meta.dirname, 'supplier-comparison.html'), shipping: resolve(import.meta.dirname, 'shipping-lab.html'), purchasing: resolve(import.meta.dirname, 'purchasing.html'), business: resolve(import.meta.dirname, 'business.html') } } },
   };
 });

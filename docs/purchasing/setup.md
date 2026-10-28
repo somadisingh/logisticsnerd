@@ -2,6 +2,11 @@
 
 This workspace lives entirely in LogisticsNerd. Purchasing and stock use the same PostgreSQL database. The existing order-workflow and supplier-comparison demos remain available and retain their separate fixture behavior.
 
+The **Business setup & records** page at `/business.html` now provides the setup
+questionnaire, standard entity records, customer order entry and user-created
+tables with generated CRUD forms. See [Business setup and records](business-workspace.md)
+for the workflow, foreign-key rules and remaining core integration boundary.
+
 ## Supabase connection
 
 In Supabase Dashboard, open **Connect**, select **Direct / Connection string**, then choose **Session pooler**. Keep **Type: URI**. The session pooler supports IPv4, which is useful when the direct database endpoint requires IPv6. Copy the complete URI from your dashboard; do not guess the pooler hostname or region. [Supabase connection methods](https://supabase.com/docs/guides/database/connecting-to-postgres)
@@ -52,9 +57,20 @@ In a second terminal:
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173/purchasing.html` (or the port Vite prints). Vite proxies `/api/purchasing` to the loopback API. Enter the `LOGISTICS_API_TOKEN` value from your local environment file into the connection form. The token is held only in page memory. It is cleared on disconnect or page close; it is never saved to local storage.
+Open `http://127.0.0.1:5173/business.html` for business setup and records, or
+`http://127.0.0.1:5173/purchasing.html` for purchasing (or the port Vite prints).
+Vite proxies `/api/business` and `/api/purchasing` to the loopback API. Enter the
+`LOGISTICS_API_TOKEN` value from your local environment file into the connection
+form. The token is held only in page memory. It is cleared on disconnect or page
+close; it is never saved to local storage.
 
-Core entity bindings and customer demand must be supplied by a trusted adapter. The production OperationsNerd item/entity mapping remains pending. The API deliberately provides no endpoint that lets a browser create authoritative core bindings, select an arbitrary business database, or supply an approval actor. Development seed data must be explicitly identified as such and must not be represented as a production catalog.
+The business-record service is a standalone local adapter: it creates mapped
+references for standard records and publishes demand when a customer order is
+submitted. It does not let clients write arbitrary core bindings, select another
+business database, supply an approval actor or create a login by adding an
+employee. The production OperationsNerd item/entity mapping remains pending.
+Development seed data remains explicitly synthetic and is not overwritten or
+represented as a production catalog.
 
 The configured `LOGISTICS_ACTOR_REF` must resolve to a current actor binding whose snapshot grants `can_approve_purchases: true` before purchase approval can succeed.
 

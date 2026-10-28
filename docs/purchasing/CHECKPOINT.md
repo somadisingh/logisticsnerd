@@ -2,6 +2,21 @@
 
 ## Current state
 
+- Dennis's setup/CRUD extension is implemented: `/business.html` provides a
+  questionnaire, standard entity and employee records, customer order entry,
+  and forms generated for user-created tables and fields.
+- Real foreign keys enforce relationships; customer-order submission publishes
+  demand atomically and freezes submitted documents. Stock and approved purchase
+  documents remain outside generic CRUD.
+- Migration `202610280001_business_records.sql` is applied to the existing
+  free-tier Supabase project, with a private pre-migration backup. Existing
+  purchasing, receipt and stock row counts are unchanged.
+- Hosted setup is intentionally unanswered: enter your own business details to
+  create the standard record tables. No browser-test fixtures were added there.
+- Verification: 76 PostgreSQL tests, 17 API tests, 286 JavaScript tests, build,
+  and a real local PostgreSQL browser walkthrough passed. See
+  `business-verification-2026-10-28.md` and `business-workspace.md`.
+
 - Branch: `feature/purchasing-stock-integration`; implementation commit `99278ac`.
 - Existing free-tier Supabase project is connected and initialized.
 - Both tested SQL migrations are applied; business identity, checksums, and private schema access are verified.
@@ -17,6 +32,7 @@ The API and Vite frontend were started for verification:
 
 - API: `http://127.0.0.1:8001`.
 - Purchasing page: `http://127.0.0.1:5173/purchasing.html`.
+- Setup and records: `http://127.0.0.1:5173/business.html`.
 - Enter `LOGISTICS_API_TOKEN` from `.env.local` to connect. It is kept in browser memory only.
 
 If these servers are no longer running, restart from the LogisticsNerd repository:

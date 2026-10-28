@@ -17,13 +17,9 @@ from fastapi import Depends, FastAPI, Header, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import Field
 
-PositiveInt = Annotated[StrictInt, Field(gt=0)]
-PositivePathInt = Annotated[int, Field(gt=0)]
-NonNegativeInt = Annotated[StrictInt, Field(ge=0)]
-RequestKey = Annotated[str, Field(min_length=1, max_length=200, pattern=r"^\S+$")]
-Currency = Annotated[str, Field(pattern=r"^[A-Z]{3}$")]
+from .http_models import Command, Currency, Input, NonNegativeInt, PositiveInt, PositivePathInt
 
 
 @dataclass(frozen=True)
@@ -42,14 +38,6 @@ class Settings:
     @property
     def configured(self) -> bool:
         return all((self.database_url, self.business_key, self.api_token, self.actor_ref))
-
-
-class Input(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
-
-class Command(Input):
-    idempotency_key: RequestKey
 
 
 class QuoteInput(Command):
@@ -127,6 +115,8 @@ class WorkspaceService:
             "allocations": "purchase_allocations", "stock": "stock_levels",
         }
         result = {name: conn.execute(f"SELECT * FROM logistics.{table}").fetchall() for name, table in tables.items()}
+        from .records import decorate_references
+        result["references"] = decorate_references(conn, result["references"])
         for row in result["stock"]:
             row["available"] = row["on_hand"] - row["reserved"]
         from .purchasing import _demand_position
@@ -280,6 +270,8 @@ def create_app(
     def summary(item_id: PositivePathInt, location_id: PositivePathInt, conn: Any = Depends(connection)) -> Any:
         return invoke(conn, "stock_summary", {"item_id": item_id, "location_id": location_id})
 
+    from .records_api import register_routes
+    register_routes(app, connection, _public_json)
     return app
 
 

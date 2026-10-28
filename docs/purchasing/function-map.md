@@ -110,10 +110,13 @@ They are **not all purchasing implementations** in this milestone.
 
 | Function | Tables or contracts read | Tables or contracts written | Ownership/status |
 | --- | --- | --- | --- |
-| Create/read/update/archive supplier, customer, item, shipper or location | Authoritative core entities, role/type mapping, history | Core-owned standard entities and revisions through adapter | Core contract dependency; bindings are projections |
-| Add/read/change/remove a configured extra field | Core specifications and configured field values | Core specification/version/value model | Core; production mapping pending |
+| Configure business and standard record tables | Business setup and registered definitions | `business_setup`, `record_tables`, `record_fields`, typed `record_*` tables | Standalone questionnaire implemented; OperationsNerd adapter pending |
+| Create/read/update/archive/delete supplier, customer, item, shipper, location or employee | Registered typed record tables; reference targets; purchasing/stock dependencies | Typed `record_*` rows, local reference bridge, `record_events`, shared request registry | Standalone generic CRUD implemented; employees do not grant access |
+| Create a user table or add a field | Registered definitions and target tables | Additive typed SQL table/column, real foreign keys, metadata and request result | Same CRUD forms handle new definitions; removal/type changes require future migrations |
+| Change fields through OperationsNerd chat | Core specifications and configured field values | Core specification/version/value model | Core production mapping pending; standalone notes do not execute chat configuration |
 | Read supplier at a historical time | Core revision validity intervals; PO frozen snapshots | None | Core adapter + purchasing snapshot |
-| Create/read/edit/cancel customer orders and lines | Core customer/item identities and demand | Host customer order model; local typed demand projection | Customer-order/core boundary; authoritative mapping pending |
+| Create/read/edit/delete/archive draft customer orders and lines | Local customer/item records and registered fields | `record_customer_orders`, `record_customer_order_lines`, audit/request records | Standalone UI and constraints implemented; authoritative host mapping pending |
+| Submit a customer order to purchasing | Active local customer/items and all active draft lines | Atomic `demand_lines` publication, frozen order/line links, audit/request result | Implemented; amendment/cancellation after submission still requires policy |
 | Read stock by location | Immutable ledger, reservations, lots | None | Stock projection |
 | Receive goods; reserve/release stock | PO/allocation limits; stock resources and demand | Stock receipts, movements, reservations, explicit links | Stock implementation; purchasing initiates receipt |
 | Create/read/edit shipment and lines; dispatch | Demand/order references; active reservations; carrier contract | Stock shipments, lines, dispatch, shipment movements | Stock |

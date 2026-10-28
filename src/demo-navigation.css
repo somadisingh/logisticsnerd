@@ -1,6 +1,6 @@
 .demo-header { border-bottom: 1px solid var(--border); }
 .demo-header > .reset-button { margin-left: auto; white-space: nowrap; }
-.workflow-nav { display: flex; gap: 24px; margin-left: 26px; font-size: 12px; }
+.workflow-nav { display: flex; flex-wrap: wrap; gap: 6px 24px; margin-left: 26px; font-size: 12px; }
 .workflow-nav a { color: #64716a; text-decoration: none; padding: 9px 0; }
 .workflow-nav a[aria-current] { color: var(--green); box-shadow: 0 2px var(--green); }
 
