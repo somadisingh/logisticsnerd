@@ -9,3 +9,10 @@ coverage/
 .env
 .env.*
 !.env.example
+
+# Persistent Python backend and local database verification.
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+supabase/.temp/

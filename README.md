@@ -1,5 +1,7 @@
 # LogisticsNerd
 
+The new PostgreSQL purchasing and stock workspace is implemented on `feature/purchasing-stock-integration`. See [setup](docs/purchasing/setup.md), [function inventory](docs/purchasing/function-map.md), and the [implementation checkpoint](docs/purchasing/CHECKPOINT.md). Supabase connectivity is verified; remote migrations have not yet been applied. The existing in-memory demos below remain available.
+
 LogisticsNerd is being developed as reusable Python business rules for OperationsNerd. The standalone order → reservation → shortage → supplier recommendation → explicit purchase approval → receiving → fulfillment rules now have an **in-memory repository**, deterministic tests and a runnable demo. This is not a persistent integrated workflow or a separate CRM.
 
 ```sh

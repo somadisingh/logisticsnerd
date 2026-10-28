@@ -1,0 +1,3 @@
+-r requirements-purchasing.txt
+# Native disposable PostgreSQL for local acceptance checks (no Docker required).
+pgserver==0.1.4
