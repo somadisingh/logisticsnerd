@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
+from .cash import record_receipt_charges
 from .db import run_command
 from .errors import Conflict, InsufficientStock, NotFound, ValidationError
 
@@ -332,7 +333,10 @@ def receive_delivery(conn, delivery_ref, lines, idempotency_key, received_on, as
                 demand = _demand(c, allocation["demand_line_id"], item_id=line["item_id"])
                 _link_received(c, result, allocation, demand["external_key"], idempotency_key, as_of)
             results.append(result)
-        return {"receipt_id": receipt_id, "delivery_ref": delivery_ref, "lines": results}
+        # Supplier charges commit with the stock rows and replay with the result.
+        charges = record_receipt_charges(c, receipt_id, idempotency_key)
+        return {"receipt_id": receipt_id, "delivery_ref": delivery_ref, "lines": results,
+                "supplier_charges": charges}
     return run_command(conn, "stock.receive_delivery", idempotency_key, payload, work)
 
 
