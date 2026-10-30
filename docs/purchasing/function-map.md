@@ -119,8 +119,8 @@ They are **not all purchasing implementations** in this milestone.
 | Submit a customer order to purchasing | Active local customer/items and all active draft lines | Atomic `demand_lines` publication, frozen order/line links, audit/request result | Implemented; amendment/cancellation after submission still requires policy |
 | Read stock by location | Immutable ledger, reservations, lots | None | Stock projection |
 | Receive goods; reserve/release stock | PO/allocation limits; stock resources and demand | Stock receipts, movements, reservations, explicit links | Stock implementation; purchasing initiates receipt |
-| Create/read/edit shipment and lines; dispatch | Demand/order references; active reservations; carrier contract | Stock shipments, lines, dispatch, shipment movements | Stock |
-| Record carrier update/read shipment state | Shipment and event history | New tracking event only; state derived | Stock; five states, delivered terminal |
+| Create/read shipment, add reserved lines and dispatch | Demand/order references; active reservations; all draft commitments | Existing stock shipment/line/dispatch commands and shipment movements | Stock engine unchanged; API and Shipping UI implemented; saved-line edit/remove not supported |
+| Record carrier update/read shipment state | Shipment and event history | Existing stock tracking command only; state derived | API and Shipping UI implemented; five states, delivered terminal |
 | Maintain carrier transport options and generate labels | Core shipper/options contract; carrier integration | Core options or label evidence | Core/stock integration; provider contract pending |
 | Damage/count corrections/customer returns | Original movements, locations, lots and shipment references | New compensating movements; never erase posted stock | Stock extension; not implemented by purchasing |
 | Move stock between locations | Source/destination resources, reservations/lots | Atomic outward/inward transfer movements | Stock extension; not silently part of receipt MVP |

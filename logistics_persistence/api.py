@@ -272,6 +272,8 @@ def create_app(
 
     from .records_api import register_routes
     register_routes(app, connection, _public_json)
+    from .fulfillment_api import register_routes as register_fulfillment_routes
+    register_fulfillment_routes(app, connection, _public_json)
     return app
 
 

@@ -7,6 +7,10 @@ questionnaire, standard entity records, customer order entry and user-created
 tables with generated CRUD forms. See [Business setup and records](business-workspace.md)
 for the workflow, foreign-key rules and remaining core integration boundary.
 
+The **Shipping** page at `/shipments.html` connects the existing stock commands
+to shipment preparation, dispatch and manual carrier updates. See
+[Shipping workspace](shipping-workspace.md) for the demo sequence and API.
+
 ## Supabase connection
 
 In Supabase Dashboard, open **Connect**, select **Direct / Connection string**, then choose **Session pooler**. Keep **Type: URI**. The session pooler supports IPv4, which is useful when the direct database endpoint requires IPv6. Copy the complete URI from your dashboard; do not guess the pooler hostname or region. [Supabase connection methods](https://supabase.com/docs/guides/database/connecting-to-postgres)
@@ -57,9 +61,10 @@ In a second terminal:
 npm run dev
 ```
 
-Open `http://127.0.0.1:5173/business.html` for business setup and records, or
-`http://127.0.0.1:5173/purchasing.html` for purchasing (or the port Vite prints).
-Vite proxies `/api/business` and `/api/purchasing` to the loopback API. Enter the
+Open `http://127.0.0.1:5173/business.html` for business setup and records,
+`http://127.0.0.1:5173/purchasing.html` for purchasing, or
+`http://127.0.0.1:5173/shipments.html` for shipping (or the port Vite prints).
+Vite proxies `/api/business`, `/api/purchasing` and `/api/fulfillment` to the loopback API. Enter the
 `LOGISTICS_API_TOKEN` value from your local environment file into the connection
 form. The token is held only in page memory. It is cleared on disconnect or page
 close; it is never saved to local storage.

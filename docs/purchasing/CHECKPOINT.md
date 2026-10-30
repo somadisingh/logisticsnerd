@@ -1,6 +1,19 @@
-# Implementation checkpoint - 28 October 2026
+# Implementation checkpoint - 30 October 2026
 
 ## Current state
+
+- Shipping API and UI are implemented at `/api/fulfillment` and
+  `/shipments.html`: customer-order selection, reservation-backed lines,
+  partial shipments, dispatch, inventory totals and carrier history.
+- Existing stock commands are used unchanged. This extension adds no SQL
+  migration, cash-account behavior or OperationsNerd changes. Carrier/tracking
+  and label references are entered manually.
+- Current checks: 85 PostgreSQL acceptance tests, 26 HTTP-boundary tests, all
+  286 existing JavaScript tests and production build pass. The real browser
+  walkthrough verifies six toys received and two shipments of four and two,
+  lost-response retries, failed-refresh retries and terminal delivery.
+- Shipping reads were verified against the existing Supabase project without
+  changing its shipments or stock. See `shipping-verification-2026-10-30.md`.
 
 - Dennis's setup/CRUD extension is implemented: `/business.html` provides a
   questionnaire, standard entity and employee records, customer order entry,
@@ -17,9 +30,11 @@
   and a real local PostgreSQL browser walkthrough passed. See
   `business-verification-2026-10-28.md` and `business-workspace.md`.
 
-- Branch: `feature/purchasing-stock-integration`; implementation commit `99278ac`.
+- Branch: `feature/purchasing-stock-integration`; earlier purchasing/stock commit
+  `99278ac`, business setup commit `209af70`. See Git history for the shipping extension.
 - Existing free-tier Supabase project is connected and initialized.
-- Both tested SQL migrations are applied; business identity, checksums, and private schema access are verified.
+- Existing checksum-verified SQL migrations are applied; business identity and
+  private schema access are verified.
 - A private pre-migration business-schema backup is saved in ignored `.local-planning/backups/`.
 - Explicit synthetic demo bindings/demand were seeded.
 - Supabase-backed browser verification passed: purchase 1 approved, receipts 3 + 8, total received 11, outstanding 0, on-hand/reserved 15/15.
@@ -33,6 +48,7 @@ The API and Vite frontend were started for verification:
 - API: `http://127.0.0.1:8001`.
 - Purchasing page: `http://127.0.0.1:5173/purchasing.html`.
 - Setup and records: `http://127.0.0.1:5173/business.html`.
+- Shipping: `http://127.0.0.1:5173/shipments.html`.
 - Enter `LOGISTICS_API_TOKEN` from `.env.local` to connect. It is kept in browser memory only.
 
 If these servers are no longer running, restart from the LogisticsNerd repository:

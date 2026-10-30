@@ -9,6 +9,13 @@ foreign keys. Submitting an order publishes demand to purchasing; posted stock
 and approved documents retain their controlled commands. OperationsNerd core
 mapping and production host authentication remain pending.
 
+The [shipping workspace](docs/purchasing/shipping-workspace.md) at
+`/shipments.html` now exposes the existing stock engine's shipment preparation,
+dispatch and carrier-event commands through an authenticated API and browser UI.
+Read reserved quantities, prepare partial shipments and show inventory changing
+on dispatch. Carrier and tracking references are manual; no cash-account or
+stock-engine changes are included.
+
 LogisticsNerd is being developed as reusable Python business rules for OperationsNerd. The standalone order → reservation → shortage → supplier recommendation → explicit purchase approval → receiving → fulfillment rules now have an **in-memory repository**, deterministic tests and a runnable demo. This is not a persistent integrated workflow or a separate CRM.
 
 ```sh

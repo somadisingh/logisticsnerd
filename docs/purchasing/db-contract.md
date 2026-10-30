@@ -50,7 +50,14 @@ schema changes and the external OperationsNerd boundary.
 
 Each line is `{po_line_id, item_id, location_id, quantity, lot_number?, expiry_date?, allocations:[{purchase_allocation_id,demand_line_id,quantity}]}`. `source_ref` is derived as `str(po_line_id)`. Allocation portions sum to at most the received physical line quantity; the rest is free stock. Several portions for one PO line are valid, including separate lots. The command locks and validates PO and allocation totals before stock writes; approved PO required, item/demand links must match, PO and allocation quantities cannot be exceeded. Every receipt/movement/reservation/allocation row is committed together. Returns `{receipt_id,delivery_ref,lines:[{receipt_line_id,movement_id,lot_id,quantity,reservations:[{reservation_id,receipt_allocation_id,purchase_allocation_id,demand_line_id,quantity}]}]}`.
 
-`receive`, `receive_and_reserve`, `open_stock`, `reserve`, `release`, `ship`, `track_lots`, `hold_lot`, `release_hold`, `create_shipment`, `add_shipment_line`, `dispatch`, `record_tracking_event` preserve the single-line stock behavior using the same runner. All accept explicit `location_id`; no guessed production location exists.
+`receive`, `receive_and_reserve`, `open_stock`, `reserve`, `release`, `ship`, `track_lots`, `hold_lot`, `release_hold`, `create_shipment`, `add_shipment_line`, `dispatch`, `record_tracking_event` preserve the single-line stock behavior using the same runner. Receiving/reserving use explicit locations; shipment operations resolve locations from their reservations. No production location is guessed.
+
+The `/api/fulfillment` adapter and `/shipments.html` page expose shipment reads,
+creation, reservation-backed line additions, dispatch and tracking events using
+these existing commands. Read projections use a committed snapshot and account
+for all draft shipment commitments. See
+[Shipping workspace](shipping-workspace.md) for request shapes and supported
+manual carrier references. This UI/API extension changes no stock tables or rules.
 
 ## Purchasing tables (coordination)
 
