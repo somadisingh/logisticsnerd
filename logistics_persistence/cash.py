@@ -1,7 +1,8 @@
 """Minimal supplier cash accounts: one currency, append-only money events.
 
 Supplier charges are written by stock.receive_delivery inside its own command
-transaction; payments use the shared request registry. Balances are derived
+transaction; payments and the one-time opening cash use the shared request
+registry. Balances are derived
 from money_ledger, never stored. Database triggers repeat every amount,
 currency and overpayment rule for direct SQL writes.
 """
@@ -10,7 +11,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from .db import run_command
-from .errors import ValidationError
+from .errors import Conflict, ValidationError
 
 MONEY_LOCK_NAMESPACE = 1768842364
 
@@ -137,8 +138,34 @@ def supplier_balances(conn):
     return result
 
 
+def record_opening_cash(conn, amount_minor, as_of, idempotency_key):
+    """Record the business's opening cash once, in the business currency."""
+    if type(amount_minor) is not int or amount_minor < 0:
+        raise ValidationError("amount_minor must be a nonnegative integer")
+    as_of = _date("as_of", as_of)
+
+    def work(c):
+        _lock_money(c)
+        if c.execute("SELECT 1 FROM logistics.money_ledger WHERE entry_type='opening_cash'").fetchone():
+            raise Conflict("Opening cash has already been recorded")
+        currency = _currency(c)
+        if currency is None:
+            raise ValidationError("Set the business currency in Business setup before recording opening cash")
+        entry = c.execute("""INSERT INTO logistics.money_ledger(entry_type,amount_minor,currency,occurred_on,request_key)
+            VALUES('opening_cash',%s,%s,%s,%s) RETURNING id""", (amount_minor, currency, as_of, idempotency_key)).fetchone()
+        return dict(ledger_entry_id=entry["id"], amount_minor=amount_minor, currency=currency, as_of=as_of)
+
+    return run_command(conn, "cash.record_opening_cash", idempotency_key,
+                       dict(amount_minor=amount_minor, as_of=as_of), work)
+
+
 def cash_balance(conn):
-    """Net cash recorded in the ledger. No opening balance or customer receipts exist yet."""
-    row = conn.execute("""SELECT COALESCE(sum(amount_minor) FILTER (WHERE entry_type='supplier_payment'),0)::bigint AS paid
+    """Opening cash minus supplier payments. Customer receipts are not recorded yet."""
+    row = conn.execute("""SELECT
+        COALESCE(sum(amount_minor) FILTER (WHERE entry_type='opening_cash'),0)::bigint AS opening,
+        min(occurred_on) FILTER (WHERE entry_type='opening_cash') AS opened_on,
+        COALESCE(sum(amount_minor) FILTER (WHERE entry_type='supplier_payment'),0)::bigint AS paid
         FROM logistics.money_ledger""").fetchone()
-    return dict(currency=_currency(conn), received_minor=0, paid_out_minor=row["paid"], balance_minor=-row["paid"])
+    return dict(currency=_currency(conn), opening_minor=row["opening"],
+                opened_on=row["opened_on"].isoformat() if row["opened_on"] else None,
+                paid_out_minor=row["paid"], balance_minor=row["opening"] - row["paid"])

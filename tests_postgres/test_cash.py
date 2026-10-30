@@ -7,7 +7,7 @@ from unittest import mock
 import psycopg
 
 from logistics_persistence import cash, core, purchasing as p, stock
-from logistics_persistence.errors import IdempotencyConflict, LogisticsError, ValidationError
+from logistics_persistence.errors import Conflict, IdempotencyConflict, LogisticsError, ValidationError
 from tests_postgres.common import PostgresCase
 
 
@@ -216,5 +216,49 @@ class CashTests(PostgresCase):
                  charged_minor=500, paid_minor=120, owed_minor=380),
             dict(supplier_id=other, supplier_key="supplier-B", name="Supplier B", currency="USD",
                  charged_minor=300, paid_minor=0, owed_minor=300)])
-        self.assertEqual(cash.cash_balance(self.conn),
-                         dict(currency="USD", received_minor=0, paid_out_minor=120, balance_minor=-120))
+        self.assertEqual(cash.cash_balance(self.conn), dict(currency="USD", opening_minor=0, opened_on=None,
+                                                            paid_out_minor=120, balance_minor=-120))
+
+    def test_opening_cash_minus_payments_is_the_cash_balance(self):
+        self.conn.execute("INSERT INTO logistics.business_setup(business_name,currency) VALUES('Demo','USD')")
+        opening = cash.record_opening_cash(self.conn, 10000, "2026-10-01", "opening")
+        self.assertEqual((opening["amount_minor"], opening["currency"], opening["as_of"]), (10000, "USD", "2026-10-01"))
+        line, allocation = self.purchase(4, 125)
+        self.receive(line, allocation, 4)
+        cash.record_supplier_payment(self.conn, self.supplier, 300, date.today(), self.key("pay"))
+        self.assertEqual(cash.cash_balance(self.conn), dict(currency="USD", opening_minor=10000, opened_on="2026-10-01",
+                                                            paid_out_minor=300, balance_minor=9700))
+        # Opening cash is not a supplier account.
+        self.assertEqual([row["supplier_key"] for row in cash.supplier_balances(self.conn)], ["supplier-A"])
+
+    def test_opening_cash_is_recorded_once_and_replays_its_key(self):
+        self.conn.execute("INSERT INTO logistics.business_setup(business_name,currency) VALUES('Demo','EUR')")
+        first = cash.record_opening_cash(self.conn, 5000, date(2026, 10, 1), "opening")
+        self.assertEqual(first["currency"], "EUR")
+        self.assertEqual(cash.record_opening_cash(self.conn, 5000, "2026-10-01", "opening"), first)
+        with self.assertRaises(IdempotencyConflict):
+            cash.record_opening_cash(self.conn, 6000, "2026-10-01", "opening")
+        with self.assertRaisesRegex(Conflict, "already been recorded"):
+            cash.record_opening_cash(self.conn, 6000, "2026-10-01", "opening-again")
+        with self.assertRaises(psycopg.errors.UniqueViolation):
+            self.conn.execute("""INSERT INTO logistics.money_ledger(entry_type,amount_minor,currency,occurred_on,request_key)
+                VALUES('opening_cash',1,'EUR','2026-10-01','opening')""")
+        self.assertEqual(cash.cash_balance(self.conn)["opening_minor"], 5000)
+        for sql in ("UPDATE logistics.money_ledger SET amount_minor=1", "DELETE FROM logistics.money_ledger"):
+            with self.subTest(sql=sql), self.assertRaises(psycopg.errors.CheckViolation):
+                self.conn.execute(sql)
+
+    def test_opening_cash_follows_the_currency_rule(self):
+        with self.assertRaisesRegex(ValidationError, "business currency"):
+            cash.record_opening_cash(self.conn, 5000, "2026-10-01", "no-currency")
+        self.assertEqual(self.ledger_count(), 0)
+        with self.assertRaises(psycopg.errors.CheckViolation):
+            self.conn.execute("""INSERT INTO logistics.money_ledger(entry_type,amount_minor,currency,occurred_on,request_key)
+                VALUES('opening_cash',1,'USD','2026-10-01','direct')""")
+        # Before setup, the currency of earlier money is the business currency.
+        line, allocation = self.purchase(4, 125)
+        self.receive(line, allocation, 4)
+        self.assertEqual(cash.record_opening_cash(self.conn, 0, "2026-10-01", "opening")["currency"], "USD")
+        for bad in (-1, True, 1.5):
+            with self.subTest(amount=bad), self.assertRaises(ValidationError):
+                cash.record_opening_cash(self.conn, bad, "2026-10-01", self.key("opening"))
