@@ -64,10 +64,10 @@ npm run dev
 Open `http://127.0.0.1:5173/business.html` for business setup and records,
 `http://127.0.0.1:5173/purchasing.html` for purchasing, or
 `http://127.0.0.1:5173/shipments.html` for shipping (or the port Vite prints).
-Vite proxies `/api/business`, `/api/purchasing` and `/api/fulfillment` to the loopback API. Enter the
-`LOGISTICS_API_TOKEN` value from your local environment file into the connection
-form. The token is held only in page memory. It is cleared on disconnect or page
-close; it is never saved to local storage.
+Vite proxies `/api/business`, `/api/purchasing` and `/api/fulfillment` to the
+loopback API. Pages load their data automatically. There is no token entry or
+login screen for this local demo. Vite supplies `LOGISTICS_API_TOKEN` privately
+on backend requests; it is never sent to the browser or stored in browser storage.
 
 The business-record service is a standalone local adapter: it creates mapped
 references for standard records and publishes demand when a customer order is
@@ -95,7 +95,12 @@ The page reuses a pending request key after a network failure while it stays ope
 
 ## Access and deployment boundary
 
-`LOGISTICS_API_TOKEN` is a standalone **owner development adapter**, not OperationsNerd authentication. Bind the API to loopback for this workflow. No permissive CORS policy is installed. A production host must replace the development adapter with trusted actor authorization and private-business database routing.
+`LOGISTICS_API_TOKEN` is now only a server-to-server development credential.
+The Vite development and preview proxy adds it for local workspace requests and
+rejects requests from other browser origins. Direct API clients still need the
+Bearer credential. Bind both servers to loopback. This local demo access is not
+OperationsNerd authentication; a production host must supply trusted actor
+authorization and private-business routing.
 
 The API reads core references and demand; all exposed purchasing/stock writes call transactional backend commands. It exposes no raw movement CRUD. Keep database credentials server-side. Do not grant browser roles direct write access to the `logistics` schema or add that schema to Supabase’s exposed Data API schemas as an alternative command path.
 

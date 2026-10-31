@@ -1,7 +1,7 @@
 # Shipping workspace
 
-Open `/shipments.html` or select **Shipping** in the navigation. Connect with the
-same owner development token as Purchasing. The page uses the existing private
+Open `/shipments.html` or select **Shipping** in the navigation. It loads
+automatically, without a token prompt. The page uses the existing private
 business database and stock engine. No migration or new Supabase service is
 required.
 
@@ -44,13 +44,15 @@ is reported as saved; retry unchanged or select **Refresh**. After refresh
 succeeds, the page reloads reservations, stock and shipment details together.
 Changing order or shipment restores the prior selection if its read fails.
 
-Authorization is held only in page memory, never in browser storage or a URL.
-Reload/disconnect clears it. This remains the local development login; production
-OperationsNerd authentication and routing are a separate integration.
+The browser receives no authentication token. The loopback frontend server adds
+the service credential to API requests and rejects other browser origins.
+Reload loads the workspace again automatically. Production OperationsNerd
+authentication and routing remain a separate integration.
 
 ## HTTP contract
 
-All routes begin with `/api/fulfillment` and require the existing Bearer token.
+All routes begin with `/api/fulfillment`. Direct backend calls require the
+existing Bearer credential; the local UI proxy adds it automatically.
 The pre-existing `/api/shipping` service remains the rate-comparison demo.
 
 | Method and suffix | Request / result |

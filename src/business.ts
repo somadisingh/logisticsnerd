@@ -14,7 +14,7 @@ interface BusinessRecord { id: number; version: number; archived: boolean; value
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const endpoint = '/api/business';
 const escape = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]!));
-let token = '';
+let loading = true;
 let catalog: Catalog | undefined;
 let records = new Map<string, BusinessRecord[]>();
 let selected = '';
@@ -43,7 +43,7 @@ async function request(path: string, method = 'GET', body?: Values): Promise<unk
   try {
     response = await fetch(`${endpoint}${path}`, {
       method,
-      headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { ...(body ? { 'Content-Type': 'application/json' } : {}) },
       ...(body ? { body: JSON.stringify({ ...body, idempotency_key: key }) } : {}),
     });
   } catch {
@@ -151,8 +151,8 @@ function customizationPanel(table: BusinessTable) {
 
 function render() {
   const table = currentTable();
-  app.innerHTML = `<main class="business-page">${demoNavigation('business')}<header class="business-header"><div><div class="eyebrow">BUSINESS WORKSPACE</div><h1>${escape(catalog?.setup?.business_name ?? 'Make room for your business.')}</h1><p>Set up your business, keep your records together and enter customer orders.</p></div>${catalog ? `<div class="business-actions business-header-actions">${button('Business settings','type="button" id="open-setup"','quiet')}${button('Disconnect','type="button" id="disconnect"','quiet')}</div>` : ''}</header><div class="business-feedback${failed ? ' error' : ''}" role="status" aria-live="polite">${escape(message)}</div>
-    ${!catalog ? `<section class="business-panel business-lock"><h2>Connect to your workspace</h2><p>Enter the owner development token from your local environment file. It stays in this page’s memory and clears when you disconnect or close the page.</p><form id="connect-form"><div class="business-fields business-span">${input('token','Owner development token','','password','required autocomplete="off" spellcheck="false"')}</div>${button('Connect')}</form></section>` : !catalog.setup || showSetup ? setupPanel() : `<p class="business-note">Local business workspace · OperationsNerd integration pending</p><div class="business-layout"><aside class="business-sidebar"><nav class="business-panel business-table-nav" aria-label="Record tables"><h2>Your records</h2>${catalog.tables.map(item => `<button type="button" data-table="${escape(item.slug)}" aria-pressed="${item.slug === selected}">${escape(item.label)}<small>${(records.get(item.slug) ?? []).filter(record => !record.archived).length}</small></button>`).join('')}</nav><a class="business-button secondary" href="/purchasing.html">Open purchasing →</a></aside><div class="business-main">${table ? recordsPanel(table) + editorPanel(table) + customizationPanel(table) : '<section class="business-panel"><p>No record tables are available yet.</p></section>'}</div></div>`}</main>`;
+  app.innerHTML = `<main class="business-page">${demoNavigation('business')}<header class="business-header"><div><div class="eyebrow">BUSINESS WORKSPACE</div><h1>${escape(catalog?.setup?.business_name ?? 'Make room for your business.')}</h1><p>Set up your business, keep your records together and enter customer orders.</p></div>${catalog ? `<div class="business-actions business-header-actions">${button('Business settings','type="button" id="open-setup"','quiet')}${button('Refresh','type="button" id="refresh-workspace"','quiet')}</div>` : ''}</header><div class="business-feedback${failed ? ' error' : ''}" role="status" aria-live="polite">${escape(message)}</div>
+    ${!catalog ? `<section class="business-panel"><p>${loading ? 'Loading your workspace…' : 'Could not load your workspace. Start the backend and try again.'}</p>${!loading ? button('Retry', 'type="button" id="retry-load"') : ''}</section>` : !catalog.setup || showSetup ? setupPanel() : `<p class="business-note">Local business workspace · OperationsNerd integration pending</p><div class="business-layout"><aside class="business-sidebar"><nav class="business-panel business-table-nav" aria-label="Record tables"><h2>Your records</h2>${catalog.tables.map(item => `<button type="button" data-table="${escape(item.slug)}" aria-pressed="${item.slug === selected}">${escape(item.label)}<small>${(records.get(item.slug) ?? []).filter(record => !record.archived).length}</small></button>`).join('')}</nav><a class="business-button secondary" href="/purchasing.html">Open purchasing →</a></aside><div class="business-main">${table ? recordsPanel(table) + editorPanel(table) + customizationPanel(table) : '<section class="business-panel"><p>No record tables are available yet.</p></section>'}</div></div>`}</main>`;
   bind();
 }
 
@@ -252,8 +252,8 @@ function bindBuilder(row: Element) {
 }
 
 function bind() {
-  bindForm('connect-form', async form => { token = formText(form, 'token'); await request('/catalog'); }, 'Connected to your business workspace.');
-  document.querySelector('#disconnect')?.addEventListener('click', () => { token = ''; catalog = undefined; records.clear(); pending.clear(); completedRequests.clear(); editing = null; message = ''; showSetup = false; render(); });
+  document.querySelector('#retry-load')?.addEventListener('click', () => { void loadWorkspace(); });
+  document.querySelector('#refresh-workspace')?.addEventListener('click', () => { void run(async () => {}, 'Records refreshed.'); });
   document.querySelector('#open-setup')?.addEventListener('click', () => { showSetup = true; render(); });
   document.querySelector('#close-setup')?.addEventListener('click', () => { showSetup = false; render(); });
   bindForm('setup-form', form => request('/setup','POST',{ business_name: formText(form,'business_name'), currency: formText(form,'currency').toUpperCase(), business_type: optional(formText(form,'business_type')), uses_inventory: formText(form,'uses_inventory') === 'true', setup_notes: optional(formText(form,'setup_notes')) }), 'Business settings saved. Add your first records below.', () => { showSetup = false; });
@@ -303,4 +303,16 @@ function bind() {
   }, 'Table created. You can add records now.', () => { editing = null; });
 }
 
-render();
+async function loadWorkspace() {
+  loading = true;
+  message = '';
+  failed = false;
+  render();
+  try { await refresh(); }
+  catch (error) {
+    message = error instanceof Error ? error.message : 'Could not load your workspace.';
+    failed = true;
+  } finally { loading = false; render(); }
+}
+
+void loadWorkspace();

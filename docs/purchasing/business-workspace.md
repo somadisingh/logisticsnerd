@@ -1,8 +1,9 @@
 # Business setup and records
 
-Open `/business.html` and connect with the same local owner development token
-used by the purchasing page. Credentials stay on the backend; the token stays
-in page memory and is cleared on disconnect or reload.
+Open `/business.html`. The workspace loads automatically and shows the setup
+questionnaire if the business is not configured. There is no browser token or
+login form. The local frontend server authenticates its API requests privately;
+credentials remain on the servers.
 
 The setup questionnaire asks for the business name, business activity, currency,
 whether it keeps physical stock, and optional requirements. Requirements notes

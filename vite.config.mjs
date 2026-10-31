@@ -8,6 +8,7 @@ import { createRedisCache } from './server/redis-cache.mjs';
 import { compareQuotes } from './src/domain/compare.ts';
 import { validateComparisonInput } from './src/domain/validate.ts';
 import { suppliers } from './src/data.ts';
+import { createWorkspaceProxies } from './server/workspace-proxy.mjs';
 
 export default defineConfig(({ mode }) => {
   const getEnv = () => loadEnv(mode, process.cwd(), '');
@@ -19,8 +20,8 @@ export default defineConfig(({ mode }) => {
     };
   };
   return {
-    server: { proxy: { '/api/purchasing': { target: 'http://127.0.0.1:8001' }, '/api/business': { target: 'http://127.0.0.1:8001' }, '/api/fulfillment': { target: 'http://127.0.0.1:8001' } } },
-    preview: { proxy: { '/api/purchasing': { target: 'http://127.0.0.1:8001' }, '/api/business': { target: 'http://127.0.0.1:8001' }, '/api/fulfillment': { target: 'http://127.0.0.1:8001' } } },
+    server: { proxy: createWorkspaceProxies(getEnv) },
+    preview: { proxy: createWorkspaceProxies(getEnv) },
     plugins: [{
       name: 'local-shipping-comparison',
       configureServer(server) {

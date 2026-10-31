@@ -14,7 +14,7 @@ interface Workspace { references: Binding[]; demands: Demand[]; quotes: Quote[];
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const endpoint = '/api/purchasing';
-let token = '';
+let loading = true;
 let data: Workspace | undefined;
 let busy = false;
 let progress: Row | undefined;
@@ -50,7 +50,7 @@ async function request(path: string, body?: Row): Promise<unknown> {
     pending.set(identity, key);
   }
   const response = await fetch(`${endpoint}${path}`, {
-    method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    method: body ? 'POST' : 'GET', headers: { ...(body ? { 'Content-Type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify({ ...body, idempotency_key: key }) } : {}),
   });
   const value = await response.json() as { error?: { message?: string; fields?: { location: unknown[]; message: string }[] }; detail?: string };
@@ -83,10 +83,10 @@ function render() {
   const draft = data?.purchase_orders.filter(po => po.status === 'draft') ?? [];
   const approved = data?.purchase_orders.filter(po => po.status === 'approved') ?? [];
   const draftLines = data?.purchase_lines.filter(line => draft.some(po => po.id === line.purchase_order_id)) ?? [];
-  app.innerHTML = `<main class="purchasing-page">${demoNavigation('purchasing')}<header class="purchasing-header"><div><div class="eyebrow">PURCHASING WORKSPACE</div><h1>From quote to receipt.</h1><p>Save supplier terms, approve purchases and receive deliveries. Approval commits the purchase; stock changes only when goods arrive.</p></div>${loaded ? '<button class="purchasing-button secondary" id="disconnect">Disconnect</button>' : ''}</header>
+  app.innerHTML = `<main class="purchasing-page">${demoNavigation('purchasing')}<header class="purchasing-header"><div><div class="eyebrow">PURCHASING WORKSPACE</div><h1>From quote to receipt.</h1><p>Save supplier terms, approve purchases and receive deliveries. Approval commits the purchase; stock changes only when goods arrive.</p></div>${loaded ? '<button class="purchasing-button secondary" id="refresh-workspace">Refresh</button>' : ''}</header>
     <div class="purchasing-message${failed ? ' error' : ''}" role="status" aria-live="polite">${escape(message)}</div>
-    ${!loaded ? `<section class="purchasing-panel purchasing-lock"><h2>Connect to your workspace</h2><p>Enter the local owner development token from your ignored environment file. It stays in this page’s memory and clears when the page closes.</p><form id="connect"><div class="purchasing-fields">${field('token', 'Owner development token', 'password', 'autocomplete="off" spellcheck="false"')}</div>${button('Connect')}</form><p>Backend setup: <code>docs/purchasing/setup.md</code></p></section>` : `
-    <p class="purchasing-connection">Connected to the configured business database · Owner development access</p>
+    ${!loaded ? `<section class="purchasing-panel"><p>${loading ? 'Loading purchasing…' : 'Could not load purchasing. Start the backend and try again.'}</p>${!loading ? '<button class="purchasing-button" id="retry-load">Retry</button>' : ''}</section>` : `
+    <p class="purchasing-connection">Purchasing</p>
     <div class="purchasing-grid">
       <section class="purchasing-panel purchasing-wide"><h2>Customer demand</h2>${table(['Line', 'Order', 'Item', 'Ordered', 'Reserved', 'Inbound', 'Remaining to buy', 'Currency'], data!.demands.map(d => [d.id, d.order_ref, referenceName(d.item_id), d.quantity, d.reserved_quantity, d.inbound_quantity, d.remaining_to_buy, d.currency]))}</section>
       <section class="purchasing-panel"><h2>1. Record a supplier quote</h2><p>Each saved version preserves its terms. Amounts below are integer minor units: 100 means 1.00.</p><form id="quote"><div class="purchasing-fields">${select('supplier_id','Supplier',refs('supplier'),r=>referenceName(r.id))}${select('item_id','Item',refs('item'),r=>referenceName(r.id))}${field('quantity_priced','Priced quantity','number','min="1" step="1"')}${field('capacity_quantity','Available quantity','number','min="1" step="1"')}${field('price_minor','Unit price in minor units','number','min="0" step="1"')}${field('currency','Currency','text','pattern="[A-Z]{3}" maxlength="3" value="USD"')}${field('expected_date','Expected delivery date','date')}${field('expires_at','Quote expiry','datetime-local')}</div>${button('Save quote version')}</form></section>
@@ -143,8 +143,8 @@ function bindForm(id: string, work: (fields: FormData) => Promise<unknown>, succ
 }
 
 function bind() {
-  bindForm('connect', async f => { token = text(f,'token'); return refresh(); }, 'Connected. Changes are saved in the configured database.');
-  document.querySelector('#disconnect')?.addEventListener('click', () => { token = ''; data = undefined; pending.clear(); progress = undefined; message = ''; render(); });
+  document.querySelector('#retry-load')?.addEventListener('click', () => { void loadWorkspace(); });
+  document.querySelector('#refresh-workspace')?.addEventListener('click', () => { void loadWorkspace(); });
   bindForm('quote', f => request('/quotes', { supplier_id:number(f,'supplier_id'), item_id:number(f,'item_id'), quantity_priced:number(f,'quantity_priced'),capacity_quantity:number(f,'capacity_quantity'),price_minor:number(f,'price_minor'),pricing_kind:'unit',currency:text(f,'currency'),expected_date:text(f,'expected_date'),expires_at:new Date(text(f,'expires_at')).toISOString() }), 'Quote version saved.');
   bindForm('draft', f => request('/orders',{supplier_id:number(f,'supplier_id'),currency:text(f,'currency')}),'Purchase draft saved.');
   bindForm('line', f => { const po = data!.purchase_orders.find(p=>p.id===number(f,'purchase_order_id'))!; return request(`/orders/${po.id}/lines`,{quote_version_id:number(f,'quote_version_id'),quantity:number(f,'quantity'),expected_version:po.version}); },'Purchase line saved.');
@@ -193,4 +193,16 @@ function bind() {
   },'Delivery recorded. All receipt portions and reservations were committed together.');
 }
 
-render();
+async function loadWorkspace() {
+  loading = true;
+  message = '';
+  failed = false;
+  render();
+  try { await refresh(); }
+  catch (error) {
+    message = error instanceof Error ? error.message : 'Could not load purchasing.';
+    failed = true;
+  } finally { loading = false; render(); }
+}
+
+void loadWorkspace();

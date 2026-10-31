@@ -1,6 +1,19 @@
-# Implementation checkpoint - 30 October 2026
+# Implementation checkpoint - 31 October 2026
 
 ## Current state
+
+- Removed token-entry screens from Business setup, Purchasing and Shipping at
+  the owner's request. Each page loads automatically. The local Vite server
+  authenticates backend requests privately and rejects other browser origins;
+  the browser receives no credential. Direct API authentication remains intact.
+- All three pages were checked against the configured workspace with read-only
+  open/reload tests. Historical verification notes below describe the earlier
+  manual-login flow; current startup instructions are in `setup.md`.
+- Automatic access verification passed: 300 JavaScript tests, production build,
+  and an isolated browser workflow that saved an employee, received six toys
+  and dispatched six toys through the real server-side proxy. Other-origin
+  writes were rejected; direct API authentication still returned 401 without
+  credentials. Evidence is in ignored `.local-planning/auto-workspace/`.
 
 - Shipping API and UI are implemented at `/api/fulfillment` and
   `/shipments.html`: customer-order selection, reservation-backed lines,
@@ -49,7 +62,8 @@ The API and Vite frontend were started for verification:
 - Purchasing page: `http://127.0.0.1:5173/purchasing.html`.
 - Setup and records: `http://127.0.0.1:5173/business.html`.
 - Shipping: `http://127.0.0.1:5173/shipments.html`.
-- Enter `LOGISTICS_API_TOKEN` from `.env.local` to connect. It is kept in browser memory only.
+- Pages load directly. `LOGISTICS_API_TOKEN` stays in the server configuration;
+  there is no browser token field.
 
 If these servers are no longer running, restart from the LogisticsNerd repository:
 

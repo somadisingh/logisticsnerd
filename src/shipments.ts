@@ -34,7 +34,7 @@ const input = (name: string, label: string, value: unknown = '', type = 'text', 
 const button = (label: string, attributes = '', style = '') => `<button class="shipping-button ${style}" ${attributes}>${escape(label)}</button>`;
 const empty = (title: string, help: string) => `<div class="shipping-empty"><strong>${escape(title)}</strong><p>${escape(help)}</p></div>`;
 const table = (headers: string[], rows: unknown[][]) => rows.length ? `<div class="shipping-table-wrap"><table class="shipping-table"><thead><tr>${headers.map(header => `<th scope="col">${escape(header)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${row.map(value => `<td>${escape(value)}</td>`).join('')}</tr>`).join('')}</tbody></table></div>` : '';
-let token = '';
+let loading = true;
 let data: Workspace | undefined;
 let selectedOrder = '';
 let selectedShipment: number | undefined;
@@ -57,7 +57,7 @@ async function request<T>(path: string, body?: Values): Promise<T> {
   if (key) pending.set(identity, key);
   let response: Response;
   try {
-    response = await fetch(`${endpoint}${path}`, { method: body ? 'POST' : 'GET', headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify({ ...body, idempotency_key: key }) } : {}) });
+    response = await fetch(`${endpoint}${path}`, { method: body ? 'POST' : 'GET', headers: { ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify({ ...body, idempotency_key: key }) } : {}) });
   } catch { throw new Error('Could not reach the shipping server. Your input is unchanged. Retry the same request when the connection returns.'); }
   let value: T & { error?: { message?: string; fields?: { location: unknown[]; message: string }[] }; detail?: string };
   try { value = await response.json(); } catch { throw new Error(`The server could not complete this request (${response.status}). Retry the same request.`); }
@@ -157,14 +157,13 @@ function trackingPanel() {
 }
 
 function render() {
-  app.innerHTML = `<main class="shipping-page">${demoNavigation('shipments')}<header class="shipping-header"><div><div class="eyebrow">CUSTOMER SHIPPING</div><h1>From reserved to delivered.</h1><p>Prepare customer shipments, dispatch reserved goods and follow delivery updates. Inventory changes when the shipment leaves.</p></div>${data ? `<div class="shipping-actions">${button('Refresh','type="button" id="refresh"','quiet')}${button('Disconnect','type="button" id="disconnect"','quiet')}</div>` : ''}</header><div class="shipping-feedback${failed ? ' error' : ''}" role="status" aria-live="polite">${escape(message)}</div>
-    ${!data ? `<section class="shipping-panel shipping-lock"><h2>Connect to your workspace</h2><p>Enter the same owner development token used for purchasing. It stays in this page’s memory and clears on disconnect or reload.</p><form id="connect-form"><div class="shipping-fields">${input('token','Owner development token','','password','required autocomplete="off" spellcheck="false"')}</div>${button('Connect')}</form></section>` : `<p class="shipping-note">Connected to the configured business database · Owner development access</p><div class="shipping-steps" aria-label="Shipping steps"><span>1. Choose order</span><span>2. Prepare shipment</span><span>3. Dispatch goods</span><span>4. Follow delivery</span></div><div class="shipping-grid">${customerPanel()}${draftPanel()}${linePanel()}${detailPanel()}${trackingPanel()}<section class="shipping-panel shipping-wide" id="stock-levels"><h2>Inventory by location</h2><p>On hand is physical stock. Reserved stock is held for customer orders. Available is on hand minus reserved.</p>${data.stock.length ? table(['Item','Location','On hand','Reserved','Available'], data.stock.map(value => [referenceName(value.item_id),referenceName(value.location_id),value.on_hand,value.reserved,value.available])) : empty('No stock recorded yet.', 'Receive goods in Purchasing to start the inventory ledger.')}</section></div>`}</main>`;
+  app.innerHTML = `<main class="shipping-page">${demoNavigation('shipments')}<header class="shipping-header"><div><div class="eyebrow">CUSTOMER SHIPPING</div><h1>From reserved to delivered.</h1><p>Prepare customer shipments, dispatch reserved goods and follow delivery updates. Inventory changes when the shipment leaves.</p></div>${data ? `<div class="shipping-actions">${button('Refresh','type="button" id="refresh"','quiet')}</div>` : ''}</header><div class="shipping-feedback${failed ? ' error' : ''}" role="status" aria-live="polite">${escape(message)}</div>
+    ${!data ? `<section class="shipping-panel"><p>${loading ? 'Loading shipping…' : 'Could not load shipping. Start the backend and try again.'}</p>${!loading ? button('Retry', 'type="button" id="retry-load"') : ''}</section>` : `<p class="shipping-note">Shipping</p><div class="shipping-steps" aria-label="Shipping steps"><span>1. Choose order</span><span>2. Prepare shipment</span><span>3. Dispatch goods</span><span>4. Follow delivery</span></div><div class="shipping-grid">${customerPanel()}${draftPanel()}${linePanel()}${detailPanel()}${trackingPanel()}<section class="shipping-panel shipping-wide" id="stock-levels"><h2>Inventory by location</h2><p>On hand is physical stock. Reserved stock is held for customer orders. Available is on hand minus reserved.</p>${data.stock.length ? table(['Item','Location','On hand','Reserved','Available'], data.stock.map(value => [referenceName(value.item_id),referenceName(value.location_id),value.on_hand,value.reserved,value.available])) : empty('No stock recorded yet.', 'Receive goods in Purchasing to start the inventory ledger.')}</section></div>`}</main>`;
   bind();
 }
 
 function bind() {
-  bindForm('connect-form', async fields => { token = text(fields, 'token'); await request<Workspace>('/workspace'); }, 'Connected to your shipping workspace.');
-  document.querySelector('#disconnect')?.addEventListener('click', () => { token = ''; data = undefined; detail = undefined; selectedOrder = ''; selectedShipment = undefined; pending.clear(); completedRequests.clear(); message = ''; failed = false; render(); });
+  document.querySelector('#retry-load')?.addEventListener('click', () => { void loadWorkspace(); });
   document.querySelector('#refresh')?.addEventListener('click', () => { void run(async () => {}, 'Shipping and inventory refreshed.'); });
   document.querySelector<HTMLSelectElement>('#order-select')?.addEventListener('change', async event => {
     const control = event.target as HTMLSelectElement;
@@ -215,4 +214,16 @@ function bind() {
   }, 'Carrier update saved. Inventory is unchanged.');
 }
 
-render();
+async function loadWorkspace() {
+  loading = true;
+  message = '';
+  failed = false;
+  render();
+  try { await refresh(); }
+  catch (error) {
+    message = error instanceof Error ? error.message : 'Could not load shipping.';
+    failed = true;
+  } finally { loading = false; render(); }
+}
+
+void loadWorkspace();

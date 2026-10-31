@@ -16,6 +16,9 @@ Read reserved quantities, prepare partial shipments and show inventory changing
 on dispatch. Carrier and tracking references are manual; no cash-account or
 stock-engine changes are included.
 
+Business setup, Purchasing and Shipping open directly in the local demo. The
+frontend server handles API authentication; users do not enter a token.
+
 LogisticsNerd is being developed as reusable Python business rules for OperationsNerd. The standalone order → reservation → shortage → supplier recommendation → explicit purchase approval → receiving → fulfillment rules now have an **in-memory repository**, deterministic tests and a runnable demo. This is not a persistent integrated workflow or a separate CRM.
 
 ```sh
