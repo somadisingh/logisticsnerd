@@ -222,6 +222,46 @@ class PurchasingTests(PostgresCase):
             self.approve(po, now=later)
         self.assertEqual(p.get_purchase_order(self.conn, purchase_order_id=po["id"])["status"], "draft")
 
+    def demand_without_required_by(self, quantity=10, budget_minor=None):
+        key = self.key("demand")
+        return core.register_demand(self.conn, external_key=key, order_ref="order-open", item_id=self.item,
+                                    quantity=quantity, currency="USD", required_by=None,
+                                    budget_minor=budget_minor, idempotency_key=key)["id"]
+
+    def test_demand_without_required_by_can_be_approved(self):
+        po, line, allocation, quote = self.purchase(quantity=3, demand=self.demand_without_required_by(3))
+        approved = self.approve(po)
+        self.assertEqual(approved["status"], "approved")
+
+    def test_demand_without_required_by_is_stored_as_null(self):
+        demand = self.demand_without_required_by(2)
+        row = self.conn.execute("SELECT required_by FROM logistics.demand_lines WHERE id=%s", (demand,)).fetchone()
+        self.assertIsNone(row["required_by"])
+
+    def test_compare_suppliers_without_required_by(self):
+        demand = self.demand_without_required_by(4)
+        self.quote(quantity=4)
+        result = p.compare_suppliers(self.conn, demand_line_id=demand)
+        self.assertTrue(result["feasible"] if isinstance(result, dict) else result.feasible)
+
+    def test_no_required_by_still_enforces_expiry_and_estimates(self):
+        po, line, allocation, quote = self.purchase(quantity=2, demand=self.demand_without_required_by(2))
+        later = datetime.fromisoformat(quote["expires_at"]) + timedelta(seconds=1)
+        with self.assertRaisesRegex(LogisticsError, "expired"):
+            self.approve(po, now=later)
+        other = self.purchase(quantity=2, demand=self.demand_without_required_by(2), source="ai_estimate")
+        with self.assertRaises(LogisticsError):
+            self.approve(other[0])
+
+    def test_no_required_by_still_enforces_budget_and_actor(self):
+        demand = self.demand_without_required_by(2, budget_minor=199)
+        po, *_ = self.purchase(quantity=2, demand=demand)
+        with self.assertRaisesRegex(LogisticsError, "budget"):
+            self.approve(po)
+        actor = self.bind("actor", "viewer", {"can_approve_purchases": False})
+        with self.assertRaisesRegex(LogisticsError, "authorized"):
+            p.approve_purchase_order(self.conn, purchase_order_id=po["id"], actor_id=actor, idempotency_key=self.key())
+
     def test_exact_total_price_wrong_quantity_and_wrong_item_are_rejected(self):
         quote = self.quote(pricing_kind="total", price=999)
         po = p.create_purchase_order(self.conn, supplier_id=self.supplier, currency="USD", idempotency_key=self.key())
