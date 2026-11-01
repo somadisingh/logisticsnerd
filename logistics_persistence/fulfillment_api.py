@@ -21,6 +21,17 @@ class ShipmentLineInput(Command):
     quantity: PositiveInt
 
 
+class ReserveInput(Command):
+    demand_line_id: PositiveInt
+    quantity: PositiveInt
+    location_id: PositiveInt | None = None
+    as_of: date | None = None
+
+
+class ReleaseInput(Command):
+    pass
+
+
 class DispatchInput(Command):
     carrier: Text
     as_of: date
@@ -76,3 +87,14 @@ def register_routes(app: FastAPI, connection: Callable, public_json: Callable) -
         payload = body.model_dump()
         payload['occurred_at'] = body.occurred_at.isoformat()
         return public_json(fulfillment.record_tracking_event(conn, shipment_id=shipment_id, **payload))
+
+    @app.post(prefix + '/reservations', status_code=201)
+    def reserve_stock(body: ReserveInput, conn: Any = Depends(connection)) -> Any:
+        payload = body.model_dump()
+        if body.as_of is not None:
+            payload['as_of'] = body.as_of.isoformat()
+        return public_json(fulfillment.reserve_stock(conn, **payload))
+
+    @app.post(prefix + '/reservations/{reservation_id}/release')
+    def release_reservation(reservation_id: PositivePathInt, body: ReleaseInput, conn: Any = Depends(connection)) -> Any:
+        return public_json(fulfillment.release_reservation(conn, reservation_id=reservation_id, **body.model_dump()))
