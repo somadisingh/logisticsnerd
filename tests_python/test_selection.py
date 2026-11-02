@@ -268,3 +268,43 @@ class SelectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OptionalDeadlineTests(unittest.TestCase):
+    """A demand line may have no required-by date (NULL in the schema and UI)."""
+
+    def test_selection_accepts_no_deadline(self):
+        result = select(10, [quote("a")], deadline=None)
+        self.assertTrue(result.feasible)
+        self.assertEqual(result.allocations[0].quote_id, "quote-a")
+
+    def test_late_delivery_is_not_rejected_without_deadline(self):
+        late = quote("a", expected_date=date(2030, 1, 1))
+        self.assertTrue(select(10, [late], deadline=None).feasible)
+
+    def test_late_delivery_is_still_rejected_with_a_deadline(self):
+        late = quote("a", expected_date=DEADLINE + timedelta(days=1))
+        self.assertFalse(select(10, [late]).feasible)
+
+    def test_explanation_states_no_required_by_date(self):
+        text = " ".join(select(10, [quote("a")], deadline=None).explanations)
+        self.assertIn("no required-by date", text)
+        self.assertNotIn("deadline None", text)
+
+    def test_revalidation_without_deadline_still_checks_expiry_and_currency(self):
+        q = quote("a")
+        q.validate_at(NOW, None, "USD")
+        with self.assertRaisesRegex(ValueError, "expired"):
+            q.validate_at(NOW + timedelta(days=2), None, "USD")
+        with self.assertRaisesRegex(ValueError, "currency"):
+            q.validate_at(NOW, None, "EUR")
+
+    def test_revalidation_without_deadline_still_rejects_past_delivery(self):
+        q = quote("a", expected_date=date(2026, 9, 30))
+        with self.assertRaisesRegex(ValueError, "before current UTC date"):
+            q.validate_at(NOW, None, "USD")
+
+    def test_non_date_deadline_is_still_rejected(self):
+        for bad in ("2026-10-15", datetime(2026, 10, 15, tzinfo=timezone.utc)):
+            with self.assertRaisesRegex(ValueError, "calendar date"):
+                select(10, [quote("a")], deadline=bad)

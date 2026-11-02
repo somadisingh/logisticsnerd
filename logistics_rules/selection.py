@@ -53,7 +53,9 @@ def _aware(name: str, value: datetime) -> None:
         raise ValueError(f"{name} must be a timezone-aware datetime.")
 
 
-def _date(name: str, value: date) -> None:
+def _date(name: str, value: date | None, *, optional: bool = False) -> None:
+    if value is None and optional:
+        return
     if type(value) is not date:
         raise ValueError(f"{name} must be a calendar date, not a datetime or string.")
 
@@ -116,10 +118,10 @@ class Quote:
             )
         return quantity * self.price_cents
 
-    def validate_at(self, now: datetime, deadline: date, currency: str) -> None:
+    def validate_at(self, now: datetime, deadline: date | None, currency: str) -> None:
         """Revalidate validity and delivery using today's UTC calendar date."""
         _aware("now", now)
-        _date("deadline", deadline)
+        _date("deadline", deadline, optional=True)
         _currency(currency)
         failures = []
         if self.currency != currency:
@@ -139,7 +141,7 @@ class Quote:
             failures.append(
                 f"Quote {self.id} delivery {self.expected_date.isoformat()} is before current UTC date {utc_today.isoformat()}."
             )
-        if self.expected_date > deadline:
+        if deadline is not None and self.expected_date > deadline:
             failures.append(
                 f"Quote {self.id} delivery {self.expected_date.isoformat()} is after deadline {deadline.isoformat()}."
             )
@@ -184,7 +186,7 @@ def select_quotes(
     quotes: tuple[Quote, ...],
     *,
     now: datetime,
-    deadline: date,
+    deadline: date | None,
     currency: str,
     budget_cents: int | None,
 ) -> Recommendation:
@@ -196,7 +198,7 @@ def select_quotes(
     """
     _integer("needed", needed)
     _aware("now", now)
-    _date("deadline", deadline)
+    _date("deadline", deadline, optional=True)
     _currency(currency)
     if budget_cents is not None:
         _integer("budget_cents", budget_cents)
@@ -300,9 +302,10 @@ def select_quotes(
         price = quote.cost(quantity)
         allocations.append(Allocation(quote.id, quantity, price))
         provenance = f"{quote.source} estimate, not a supplier commitment" if quote.estimated else "supplier quote"
+        deadline_fact = f" <= deadline {deadline.isoformat()}" if deadline is not None else "; no required-by date"
         explanations.append(
             f"Recommend {quantity} units from {quote.supplier_id} using quote {quote.id}, cost {price} cents {currency}; "
-            f"delivery {quote.expected_date.isoformat()} <= deadline {deadline.isoformat()}; {provenance}."
+            f"delivery {quote.expected_date.isoformat()}{deadline_fact}; {provenance}."
         )
     budget_fact = f" <= budget {budget_cents} cents" if budget_cents is not None else "; no budget limit configured"
     explanations.append(
