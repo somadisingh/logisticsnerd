@@ -1,6 +1,7 @@
 import { createComparisonRunner, providerAccess } from './shipping.mjs';
+import { readBody, bodyFailure } from './read-body.mjs';
 
-export function shippingMiddleware(getEnv) {
+export function shippingMiddleware(getEnv, { bodyIdleMs } = {}) {
   const fetcher = (...args) => fetch(...args);
   // Read credentials afresh so a .env.local update works without exposing them.
   const run = createComparisonRunner({ fetcher, env: new Proxy({}, { get: (_, key) => getEnv()[key] }) });
@@ -16,11 +17,9 @@ export function shippingMiddleware(getEnv) {
     if (active) return send(429, { error: 'A comparison is already running. Wait for it to finish.' });
     active = true;
     try {
-      let content = '';
-      for await (const chunk of req) {
-        content += chunk;
-        if (content.length > 16384) return send(413, { error: 'The parcel request is too large.' });
-      }
+      const read = await readBody(req, bodyIdleMs === undefined ? {} : { idleMs: bodyIdleMs });
+      if (read.error) { const [status, error] = bodyFailure(read.error, 'parcel'); return send(status, { error }); }
+      const content = read.text;
       let body;
       try { body = JSON.parse(content); } catch { return send(400, { error: 'Send a valid JSON parcel request.' }); }
       const result = await run(body.parcel, body.providers);
