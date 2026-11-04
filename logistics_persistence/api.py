@@ -270,6 +270,15 @@ def create_app(
     def summary(item_id: PositivePathInt, location_id: PositivePathInt, conn: Any = Depends(connection)) -> Any:
         return invoke(conn, "stock_summary", {"item_id": item_id, "location_id": location_id})
 
+    @app.get('/api/purchasing/lot-risks')
+    def lot_risks(as_of: date, horizon_days: Annotated[int, Field(ge=0, le=366)] = 30,
+                  location_id: PositivePathInt | None = None,
+                  item_id: PositivePathInt | None = None,
+                  conn: Any = Depends(connection)) -> Any:
+        from .stock_risk import lot_risks as project
+        return _public_json(project(conn, as_of=as_of, horizon_days=horizon_days,
+                                    location_id=location_id, item_id=item_id))
+
     from .records_api import register_routes
     register_routes(app, connection, _public_json)
     from .fulfillment_api import register_routes as register_fulfillment_routes
