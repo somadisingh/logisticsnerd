@@ -43,6 +43,6 @@ export default defineConfig(({ mode }) => {
         server.httpServer?.once('close', () => { void procurement.close(); });
       },
     }],
-    build: { rollupOptions: { input: { main: resolve(import.meta.dirname, 'index.html'), comparison: resolve(import.meta.dirname, 'supplier-comparison.html'), shipping: resolve(import.meta.dirname, 'shipping-lab.html'), purchasing: resolve(import.meta.dirname, 'purchasing.html'), business: resolve(import.meta.dirname, 'business.html'), shipments: resolve(import.meta.dirname, 'shipments.html') } } },
+    build: { rollupOptions: { input: { inventory: resolve(import.meta.dirname, 'inventory.html'), main: resolve(import.meta.dirname, 'index.html'), comparison: resolve(import.meta.dirname, 'supplier-comparison.html'), shipping: resolve(import.meta.dirname, 'shipping-lab.html'), purchasing: resolve(import.meta.dirname, 'purchasing.html'), business: resolve(import.meta.dirname, 'business.html'), shipments: resolve(import.meta.dirname, 'shipments.html') } } },
   };
 });

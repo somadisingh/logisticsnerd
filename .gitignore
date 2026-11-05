@@ -16,3 +16,5 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 supabase/.temp/
+
+.browser-evidence/
