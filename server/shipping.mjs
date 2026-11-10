@@ -83,6 +83,7 @@ function rate(value, deadline) {
   let deadlineAssessment = 'unknown';
   if (min && max && min > max) return { ...value, deadlineAssessment };
   if (max) deadlineAssessment = max <= deadline ? 'estimated_on_time' : min && min > deadline ? 'estimated_late' : 'uncertain';
+  else if (min) deadlineAssessment = min > deadline ? 'estimated_late' : 'uncertain';
   else if (value.deliveryDate) deadlineAssessment = value.deliveryDate <= deadline ? 'estimated_on_time' : 'estimated_late';
   return { ...value, deadlineAssessment };
 }
