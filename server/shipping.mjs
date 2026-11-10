@@ -77,11 +77,16 @@ function cents(value) {
   return Number.isSafeInteger(result) ? result : null;
 }
 
-function rate(value, deadline) {
+function rate(value, parcel) {
+  const { deadline } = parcel;
+  const pickupDate = parcel.pickupTime.slice(0, 10);
   const min = value.earliestDate;
   const max = value.latestDate;
   let deadlineAssessment = 'unknown';
-  if (min && max && min > max) return { ...value, deadlineAssessment };
+  // A prediction before the requested pickup cannot establish suitability.
+  // Keep the provider fields visible, but do not call it on time or late.
+  if ([min, max, value.deliveryDate].some((d) => d && d < pickupDate)
+      || (min && max && min > max)) return { ...value, deadlineAssessment };
   if (max) deadlineAssessment = max <= deadline ? 'estimated_on_time' : min && min > deadline ? 'estimated_late' : 'uncertain';
   else if (value.deliveryDate) deadlineAssessment = value.deliveryDate <= deadline ? 'estimated_on_time' : 'estimated_late';
   return { ...value, deadlineAssessment };
@@ -89,7 +94,7 @@ function rate(value, deadline) {
 
 export function normalizeSmklog(body, p) {
   if (!Array.isArray(body?.rates)) throw new Error('SMKlog returned an unrecognized response.');
-  return body.rates.map((r) => rate({ carrier: String(r.carrier ?? 'Unknown'), service: String(r.service ?? 'Unspecified'), costCents: cents(r.amount), currency: typeof r.currency === 'string' ? r.currency : 'USD', deliveryDate: null, earliestDate: null, latestDate: null, transitDays: Number.isFinite(r.delivery_days) ? r.delivery_days : null, deliveryWindow: typeof r.delivery_window === 'string' ? r.delivery_window : null, guaranteed: false, providerReportedDate: isoDate(r.delivery_estimated_date) }, p.deadline));
+  return body.rates.map((r) => rate({ carrier: String(r.carrier ?? 'Unknown'), service: String(r.service ?? 'Unspecified'), costCents: cents(r.amount), currency: typeof r.currency === 'string' ? r.currency : 'USD', deliveryDate: null, earliestDate: null, latestDate: null, transitDays: Number.isFinite(r.delivery_days) ? r.delivery_days : null, deliveryWindow: typeof r.delivery_window === 'string' ? r.delivery_window : null, guaranteed: false, providerReportedDate: isoDate(r.delivery_estimated_date) }, p));
 }
 
 export function normalizeEasyPost(body, prediction, p) {
@@ -98,14 +103,14 @@ export function normalizeEasyPost(body, prediction, p) {
     const entry = prediction?.rates?.find((v) => v.rate?.id === r.id);
     const date = entry?.easypost_time_in_transit_data?.planned_ship_date === p.pickupTime.slice(0, 10)
       ? isoDate(entry.easypost_time_in_transit_data.easypost_estimated_delivery_date) : null;
-    return rate({ carrier: String(r.carrier ?? 'Unknown'), service: String(r.service ?? 'Unspecified'), costCents: cents(r.rate), currency: typeof r.currency === 'string' ? r.currency : null, deliveryDate: date, earliestDate: null, latestDate: null, transitDays: Number.isFinite(r.est_delivery_days) ? r.est_delivery_days : null, deliveryWindow: null, guaranteed: false, providerReportedDate: isoDate(r.delivery_date) }, p.deadline);
+    return rate({ carrier: String(r.carrier ?? 'Unknown'), service: String(r.service ?? 'Unspecified'), costCents: cents(r.rate), currency: typeof r.currency === 'string' ? r.currency : null, deliveryDate: date, earliestDate: null, latestDate: null, transitDays: Number.isFinite(r.est_delivery_days) ? r.est_delivery_days : null, deliveryWindow: null, guaranteed: false, providerReportedDate: isoDate(r.delivery_date) }, p);
   });
 }
 
 export function normalizeAfterShip(body, p) {
   if (!body?.data || typeof body.data !== 'object' || Array.isArray(body.data)) throw new Error('AfterShip returned an unrecognized prediction response.');
   const d = body.data;
-  return [rate({ carrier: String(d.slug ?? p.carrier), service: String(d.service_type_name ?? (p.service || 'Carrier prediction')), costCents: null, currency: null, deliveryDate: isoDate(d.estimated_delivery_date), earliestDate: isoDate(d.estimated_delivery_date_min), latestDate: isoDate(d.estimated_delivery_date_max), transitDays: null, deliveryWindow: null, guaranteed: false, confidenceCode: d.confidence_code ?? null }, p.deadline)];
+  return [rate({ carrier: String(d.slug ?? p.carrier), service: String(d.service_type_name ?? (p.service || 'Carrier prediction')), costCents: null, currency: null, deliveryDate: isoDate(d.estimated_delivery_date), earliestDate: isoDate(d.estimated_delivery_date_min), latestDate: isoDate(d.estimated_delivery_date_max), transitDays: null, deliveryWindow: null, guaranteed: false, confidenceCode: d.confidence_code ?? null }, p)];
 }
 
 class ProviderError extends Error {
