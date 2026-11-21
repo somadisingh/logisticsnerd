@@ -172,15 +172,21 @@ export async function runProvider(id, input, { env = {}, fetcher = fetch, now = 
 }
 
 export function createComparisonRunner(options = {}) {
-  const cache = new Map();
-  const blocked = new Set();
-  let config = '';
+  // Each configuration owns its own caches and denial state. An old request can
+  // finish after rotation, but must never evict or block the replacement epoch.
+  let state = { config: null, cache: new Map(), blocked: new Set() };
   return async (input, selected = providers) => {
     const p = validateParcel(input);
     if (!Array.isArray(selected) || !selected.length || new Set(selected).size !== selected.length || selected.some((id) => !providers.includes(id))) throw new Error('Select valid providers.');
-    const env = options.env ?? {};
+    // Snapshot before the first await so all providers in this comparison use
+    // the same credentials and activation flags, even if env changes mid-run.
+    // The middleware uses a get-only Proxy, so object spread would silently
+    // drop every setting. Read the supported fields explicitly, once each.
+    const env = Object.fromEntries(['SMKLOG_ENABLED', 'EASYPOST_TEST_API_KEY', 'AFTERSHIP_API_KEY', 'AFTERSHIP_EDD_ENABLED']
+      .map((key) => [key, options.env?.[key]]));
     const currentConfig = JSON.stringify([env.SMKLOG_ENABLED, env.EASYPOST_TEST_API_KEY, env.AFTERSHIP_API_KEY, env.AFTERSHIP_EDD_ENABLED]);
-    if (config !== currentConfig) { cache.clear(); blocked.clear(); config = currentConfig; }
+    if (state.config !== currentConfig) state = { config: currentConfig, cache: new Map(), blocked: new Set() };
+    const { cache, blocked } = state;
     const results = [];
     for (const id of selected) {
       const key = JSON.stringify([id, p]);
@@ -193,9 +199,9 @@ export function createComparisonRunner(options = {}) {
         results.push({ provider: id, name: names[id], status: 'access_blocked', mode: id === 'easypost' ? 'test' : 'live', checkedAt: new Date().toISOString(), durationMs: 0, traces: [], rates: [], notices: ['Access was denied earlier in this server session. Further calls are disabled; restore provider access before restarting.'], cached: false });
         continue;
       }
-      const promise = runProvider(id, p, options).then((result) => {
+      const promise = runProvider(id, p, { ...options, env }).then((result) => {
         if (['access_denied', 'rate_limited'].includes(result.status)) blocked.add(id);
-        if (!result.traces.length) cache.delete(key);
+        if (!result.traces.length && cache.get(key)?.promise === promise) cache.delete(key);
         return result;
       });
       if (cache.size >= 100) cache.delete(cache.keys().next().value);
